@@ -1,0 +1,20 @@
+{
+  "name": "bcx-item-rules",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Portable BCX rule payloads embedded in Bondage Club crafted item descriptions.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run clean && vite build && node scripts/copy-build.mjs",
+    "check": "tsc --noEmit",
+    "test": "npm run build && node test-core.mjs",
+    "clean": "node scripts/clean.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vite-plugin-monkey": "^4.0.6"
+  }
+}

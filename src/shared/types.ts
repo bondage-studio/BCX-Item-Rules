@@ -1,0 +1,85 @@
+export interface EncodedRule {
+  k: string;
+  e?: 0 | 1;
+  l?: 0 | 1;
+  d?: Record<string, unknown>;
+  q?: Record<string, unknown> | null;
+  t?: number | null;
+  tr?: 0 | 1;
+  p?: number;
+}
+
+export interface EncodedPayload {
+  v: 1;
+  id: string;
+  r: EncodedRule[];
+}
+
+export interface NormalizedRule {
+  k: string;
+  e: 0 | 1;
+  l: 0 | 1;
+  d?: Record<string, unknown>;
+  q: Record<string, unknown> | null;
+  t: number | null;
+  tr: 0 | 1;
+  p: number;
+}
+
+export interface NormalizedPayload {
+  v: 1;
+  id: string;
+  r: NormalizedRule[];
+}
+
+export interface RuleConditionData {
+  active: boolean;
+  favorite: boolean;
+  timer: number | null;
+  timerRemove: boolean;
+  requirements: Record<string, unknown> | null;
+  data: {
+    enforce: boolean;
+    log: boolean;
+    customData?: Record<string, unknown>;
+  };
+}
+
+export interface DesiredRule {
+  ruleId: string;
+  conditionData: RuleConditionData;
+  priority: number;
+  payloadIds: string[];
+  conflict?: boolean;
+}
+
+export interface DesiredRulesResult {
+  desired: Map<string, DesiredRule>;
+  payloadIds: string[];
+  errors: string[];
+  conflicts: string[];
+}
+
+export interface ManagedRuleState {
+  previousCondition: RuleConditionData | null;
+  lastApplied?: RuleConditionData;
+  createdByUs: boolean;
+  payloadIds: string[];
+  updatedAt: number;
+}
+
+export interface LocalState {
+  version: 1;
+  activePayloadIds: string[];
+  managed: Record<string, ManagedRuleState>;
+}
+
+export interface BCXIRSettings {
+  v: 1;
+  enabled: boolean;
+  scanItemCategoryOnly: boolean;
+  showConflictMessages: boolean;
+  showInvalidPayloadMessages: boolean;
+  debugLogging: boolean;
+  fallbackSyncEnabled: boolean;
+}
