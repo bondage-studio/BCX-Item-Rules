@@ -89,7 +89,7 @@ export class SettingsRuntimeScreen extends SettingsScreen {
     const currentCache = cacheEntries[this.cacheIndex] || null;
 
     if (this.selectorClicked(ROWS.permissionMode)) {
-      this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.unlockUseMeMode) });
+      this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.dangerModeEnabled && settings.unlockUseMeMode) });
     }
     if (this.checkboxClicked(ROWS.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
     if (this.checkboxClicked(ROWS.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });

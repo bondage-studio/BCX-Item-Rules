@@ -759,7 +759,7 @@
           continue;
         }
         if (!managed && current) {
-          const canSuspendInactive = applyContext.context.kind === "useMe" && settings.unlockUseMeMode === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
+          const canSuspendInactive = applyContext.context.kind === "useMe" && settings.dangerModeEnabled === true && settings.unlockUseMeMode === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
           if (!canSuspendInactive) {
             conflictMessages.push(
               (comparableCurrent == null ? void 0 : comparableCurrent.active) === false && applyContext.context.kind === "useMe" ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId : "Existing BCX rule not overwritten: " + ruleId
@@ -977,7 +977,7 @@
     }
     getDesiredRuleContext(desired, settings) {
       const playerNumber = this.getPlayerMemberNumber();
-      if (settings.rulePermissionMode === "useMe" && settings.unlockUseMeMode === true) {
+      if (settings.rulePermissionMode === "useMe" && settings.dangerModeEnabled === true && settings.unlockUseMeMode === true) {
         return { context: { kind: "useMe" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
       }
       if (settings.rulePermissionMode === "self") {
@@ -1076,6 +1076,7 @@
     fallbackSyncEnabled: true,
     rulePermissionMode: "creator",
     allowCachedOfflineCreator: true,
+    dangerModeEnabled: false,
     unlockUseMeMode: false,
     useMeSuspendInactiveConflicts: false,
     allowForeignItemRules: true,
@@ -1097,7 +1098,8 @@
   }
   function normalizeSettings(value) {
     const source = isPlainObject(value) ? value : {};
-    const unlockUseMeMode = source.unlockUseMeMode === true;
+    const dangerModeEnabled = source.dangerModeEnabled === true;
+    const unlockUseMeMode = dangerModeEnabled && source.unlockUseMeMode === true;
     const rulePermissionMode = source.rulePermissionMode === "self" ? "self" : source.rulePermissionMode === "useMe" && unlockUseMeMode ? "useMe" : "creator";
     return {
       v: 1,
@@ -1109,8 +1111,9 @@
       fallbackSyncEnabled: source.fallbackSyncEnabled !== false,
       rulePermissionMode,
       allowCachedOfflineCreator: source.allowCachedOfflineCreator !== false,
+      dangerModeEnabled,
       unlockUseMeMode,
-      useMeSuspendInactiveConflicts: unlockUseMeMode && source.useMeSuspendInactiveConflicts === true,
+      useMeSuspendInactiveConflicts: dangerModeEnabled && source.useMeSuspendInactiveConflicts === true,
       allowForeignItemRules: source.allowForeignItemRules !== false,
       respondToRuleRequests: source.respondToRuleRequests !== false,
       autoRequestForeignRules: source.autoRequestForeignRules !== false,
@@ -1206,7 +1209,9 @@
     "main.itemRules.tip": "Register crafted item names and edit BCXIR rules.",
     "main.runtime": "Runtime / Sharing / Backup",
     "main.runtime.tip": "Configure permissions, sharing, cache, and backups.",
-    "main.diagnostics": "Diagnostics / Advanced",
+    "main.danger": "Dangerous Mode",
+    "main.danger.tip": "Opt into risky rule behavior. Leave these off unless you understand the tradeoff.",
+    "main.diagnostics": "Diagnostics",
     "main.diagnostics.tip": "Inspect sync state and use troubleshooting or cleanup tools.",
     "item.title": "BCXIR Item Rules",
     "item.delete.tip": "Delete item rules",
@@ -1225,7 +1230,7 @@
     "item.defaultName": "BCXIR Item No. {index}",
     "runtime.title": "BCXIR Runtime / Sharing / Backup",
     "runtime.permissionMode": "Permission mode:",
-    "runtime.permissionMode.tip": "Choose who BCXIR uses when applying item rules. The advanced Please use me mode must be unlocked first.",
+    "runtime.permissionMode.tip": "Choose who BCXIR uses when applying item rules. The risky Please use me option must be enabled from Dangerous Mode first.",
     "runtime.permission.creator": "Item creator",
     "runtime.permission.self": "Myself",
     "runtime.permission.useMe": "Please use me",
@@ -1253,6 +1258,21 @@
     "runtime.prompt.registry": "Paste registry backup JSON:",
     "runtime.prompt.settings": "Paste BCXIR settings JSON:",
     "runtime.prompt.export": "BCXIR export JSON:",
+    "danger.title": "BCXIR Dangerous Mode",
+    "danger.warning": "Dangerous Mode is for stronger item-rule roleplay.",
+    "danger.warning.tip": "Leave this off unless you intentionally want item rules to override more of your normal BCX safety choices.",
+    "danger.master": "Enable Dangerous Mode",
+    "danger.master.tip": "Unlocks the two risky options below. Turning this off also turns both options off.",
+    "danger.useMe": "Enable Please use me",
+    "danger.useMe.tip": "Adds Please use me to Runtime permissions. In that mode, item rules are treated as something you consented to apply to yourself.",
+    "danger.useMe.disabled.tip": "Enable Dangerous Mode first.",
+    "danger.replaceInactive": "Enable Replacement Mode",
+    "danger.replaceInactive.tip": "Lets BCXIR temporarily replace an existing same-name rule only when that rule is currently turned off, then restore it later.",
+    "danger.replaceInactive.disabled.tip": "Enable Dangerous Mode first.",
+    "danger.summary": "Active existing rules are still protected and will not be overwritten.",
+    "danger.confirm.master": "Enable Dangerous Mode? This only unlocks the risky options; it does not enable them yet.",
+    "danger.confirm.useMe": "Enable Please use me? When selected in Runtime, item rules may apply to you even when normal BCX self-permission checks would block them. Existing active rules are still protected.",
+    "danger.confirm.replaceInactive": "Enable Replacement Mode? BCXIR may temporarily replace a matching rule that already exists but is turned off, then restore it later.",
     "diagnostics.title": "BCXIR Diagnostics / Advanced",
     "diagnostics.bcx": "BCX: {bcx} / Authoring: {authoring}",
     "diagnostics.sync": "Sync: {result} / {reason}",
@@ -1321,7 +1341,9 @@
     "main.itemRules.tip": "注册制作道具名称并编辑 BCXIR 规则。",
     "main.runtime": "运行 / 分享 / 备份",
     "main.runtime.tip": "配置权限、分享、缓存与备份。",
-    "main.diagnostics": "诊断 / 高级",
+    "main.danger": "危险模式",
+    "main.danger.tip": "开启有风险的规则行为。不确定时请保持关闭。",
+    "main.diagnostics": "诊断",
     "main.diagnostics.tip": "查看同步状态，并使用排错或清理工具。",
     "item.title": "BCXIR 道具规则",
     "item.delete.tip": "删除道具规则",
@@ -1340,7 +1362,7 @@
     "item.defaultName": "BCXIR 道具 {index}",
     "runtime.title": "BCXIR 运行 / 分享 / 备份",
     "runtime.permissionMode": "权限模式：",
-    "runtime.permissionMode.tip": "选择 BCXIR 应用道具规则时使用的身份。高级“请使用我”模式需要先解锁。",
+    "runtime.permissionMode.tip": "选择 BCXIR 应用道具规则时使用的身份。有风险的“请使用我”选项需要先在危险模式中开启。",
     "runtime.permission.creator": "道具制作者",
     "runtime.permission.self": "自己",
     "runtime.permission.useMe": "请使用我",
@@ -1368,6 +1390,21 @@
     "runtime.prompt.registry": "粘贴规则注册表备份 JSON：",
     "runtime.prompt.settings": "粘贴 BCXIR 设置 JSON：",
     "runtime.prompt.export": "BCXIR 导出 JSON：",
+    "danger.title": "BCXIR 危险模式",
+    "danger.warning": "危险模式用于更强势的道具规则扮演。",
+    "danger.warning.tip": "除非你明确希望道具规则绕过更多普通 BCX 安全选择，否则请保持关闭。",
+    "danger.master": "启用危险模式",
+    "danger.master.tip": "解锁下面两个有风险的选项。关闭它也会同时关闭这两个选项。",
+    "danger.useMe": "启用“请使用我”",
+    "danger.useMe.tip": "在运行权限中加入“请使用我”。选择该模式后，道具规则会被视为你同意应用到自己身上。",
+    "danger.useMe.disabled.tip": "请先启用危险模式。",
+    "danger.replaceInactive": "启用替换模式",
+    "danger.replaceInactive.tip": "只在同名现有规则处于关闭状态时，允许 BCXIR 临时替换它，并在之后恢复。",
+    "danger.replaceInactive.disabled.tip": "请先启用危险模式。",
+    "danger.summary": "已有 active 规则仍会被保护，不会被覆盖。",
+    "danger.confirm.master": "启用危险模式？这只会解锁有风险的选项，不会直接启用它们。",
+    "danger.confirm.useMe": "启用“请使用我”？当你在运行设置中选择它后，道具规则可能在普通 BCX 自我权限检查会阻止时仍应用到你身上。已有 active 规则仍会被保护。",
+    "danger.confirm.replaceInactive": "启用替换模式？BCXIR 可能会临时替换一个已经存在但关闭的同名规则，并在之后恢复它。",
     "diagnostics.title": "BCXIR 诊断 / 高级",
     "diagnostics.bcx": "BCX：{bcx} / 编辑：{authoring}",
     "diagnostics.sync": "同步：{result} / {reason}",
@@ -1594,14 +1631,15 @@
   __publicField(_SettingsScreen, "LABEL_W", 600);
   __publicField(_SettingsScreen, "VALUE_X", 1180);
   let SettingsScreen = _SettingsScreen;
-  const ROWS$2 = {
+  const ROWS$3 = {
     status: 0,
     counts: 1,
     sync: 2,
     enabled: 3,
     itemRules: 4,
     runtime: 5,
-    diagnostics: 6
+    danger: 6,
+    diagnostics: 7
   };
   class SettingsMainScreen extends SettingsScreen {
     constructor(registry, settingsStore, bcx, synchronizer, itemRuleTransport, onSettingsChanged) {
@@ -1622,27 +1660,29 @@
       const registryCount = listRegistryEntries(this.root).length;
       const cacheCount = listRuleCacheEntries(this.root).length;
       const syncStatus = String(sync.lastSyncResult || this.t("common.notRun"));
-      this.drawLabel(ROWS$2.status, this.t("main.status", { status: bcxStatus }));
-      this.drawLabel(ROWS$2.counts, this.t("main.counts", { registered: registryCount, cached: cacheCount }));
-      this.drawLabel(ROWS$2.sync, this.t("main.sync", { result: syncStatus, pending: String(transport.pendingRequestCount || 0) }));
+      this.drawLabel(ROWS$3.status, this.t("main.status", { status: bcxStatus }));
+      this.drawLabel(ROWS$3.counts, this.t("main.counts", { registered: registryCount, cached: cacheCount }));
+      this.drawLabel(ROWS$3.sync, this.t("main.sync", { result: syncStatus, pending: String(transport.pendingRequestCount || 0) }));
       this.drawCheckbox(
-        ROWS$2.enabled,
+        ROWS$3.enabled,
         this.t("main.enable"),
         this.t("main.enable.tip"),
         settings.enabled
       );
-      this.drawWideButton(ROWS$2.itemRules, this.t("main.itemRules"), this.t("main.itemRules.tip"));
-      this.drawWideButton(ROWS$2.runtime, this.t("main.runtime"), this.t("main.runtime.tip"));
-      this.drawWideButton(ROWS$2.diagnostics, this.t("main.diagnostics"), this.t("main.diagnostics.tip"));
+      this.drawWideButton(ROWS$3.itemRules, this.t("main.itemRules"), this.t("main.itemRules.tip"));
+      this.drawWideButton(ROWS$3.runtime, this.t("main.runtime"), this.t("main.runtime.tip"));
+      this.drawWideButton(ROWS$3.danger, this.t("main.danger"), this.t("main.danger.tip"));
+      this.drawWideButton(ROWS$3.diagnostics, this.t("main.diagnostics"), this.t("main.diagnostics.tip"));
     }
     click() {
-      var _a, _b, _c, _d, _e, _f;
+      var _a, _b, _c, _d, _e, _f, _g, _h;
       super.click();
       const settings = this.settingsStore.get();
-      if (this.checkboxClicked(ROWS$2.enabled)) this.update({ enabled: !settings.enabled });
-      if (this.wideButtonClicked(ROWS$2.itemRules)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "itemRules");
-      if (this.wideButtonClicked(ROWS$2.runtime)) (_d = (_c = this.registry).setScreen) == null ? void 0 : _d.call(_c, "runtime");
-      if (this.wideButtonClicked(ROWS$2.diagnostics)) (_f = (_e = this.registry).setScreen) == null ? void 0 : _f.call(_e, "diagnostics");
+      if (this.checkboxClicked(ROWS$3.enabled)) this.update({ enabled: !settings.enabled });
+      if (this.wideButtonClicked(ROWS$3.itemRules)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "itemRules");
+      if (this.wideButtonClicked(ROWS$3.runtime)) (_d = (_c = this.registry).setScreen) == null ? void 0 : _d.call(_c, "runtime");
+      if (this.wideButtonClicked(ROWS$3.danger)) (_f = (_e = this.registry).setScreen) == null ? void 0 : _f.call(_e, "danger");
+      if (this.wideButtonClicked(ROWS$3.diagnostics)) (_h = (_g = this.registry).setScreen) == null ? void 0 : _h.call(_g, "diagnostics");
     }
     update(patch) {
       this.settingsStore.update(patch);
@@ -1812,7 +1852,7 @@
       }
     }
   }
-  const ROWS$1 = {
+  const ROWS$2 = {
     permissionMode: 0,
     foreign: 1,
     respond: 2,
@@ -1853,24 +1893,24 @@
       const cacheEntries = listRuleCacheEntries(this.root);
       const currentCache = cacheEntries[this.cacheIndex] || null;
       this.drawSelector(
-        ROWS$1.permissionMode,
+        ROWS$2.permissionMode,
         this.t("runtime.permissionMode"),
         this.t("runtime.permissionMode.tip"),
         this.permissionModeLabel(settings.rulePermissionMode)
       );
-      this.drawCheckbox(ROWS$1.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
-      this.drawCheckbox(ROWS$1.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
-      this.drawCheckbox(ROWS$1.request, this.t("runtime.request"), this.t("runtime.request.tip"), settings.autoRequestForeignRules, settings.allowForeignItemRules === false);
+      this.drawCheckbox(ROWS$2.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
+      this.drawCheckbox(ROWS$2.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
+      this.drawCheckbox(ROWS$2.request, this.t("runtime.request"), this.t("runtime.request.tip"), settings.autoRequestForeignRules, settings.allowForeignItemRules === false);
       if (currentCache) {
-        (_b = (_a = this.root).DrawBackNextButton) == null ? void 0 : _b.call(_a, 550, this.rowY(ROWS$1.selector) - 32, 700, 64, currentCache.itemName, "White", "", () => this.t("common.previous"), () => this.t("common.next"));
-        this.drawLabel(ROWS$1.details, this.t("runtime.cacheDetails", { crafter: currentCache.crafter, rules: currentCache.payload.r.length }));
+        (_b = (_a = this.root).DrawBackNextButton) == null ? void 0 : _b.call(_a, 550, this.rowY(ROWS$2.selector) - 32, 700, 64, currentCache.itemName, "White", "", () => this.t("common.previous"), () => this.t("common.next"));
+        this.drawLabel(ROWS$2.details, this.t("runtime.cacheDetails", { crafter: currentCache.crafter, rules: currentCache.payload.r.length }));
         this.drawCacheActions(Boolean(currentCache));
       } else {
-        this.drawLabel(ROWS$1.selector, this.t("runtime.noCache"));
+        this.drawLabel(ROWS$2.selector, this.t("runtime.noCache"));
         this.drawCacheActions(false);
       }
       this.drawImportExportActions();
-      this.drawRowButton(ROWS$1.back, this.t("common.back"), this.t("settings.tooltip.back"));
+      this.drawRowButton(ROWS$2.back, this.t("common.back"), this.t("settings.tooltip.back"));
     }
     click() {
       var _a, _b;
@@ -1878,30 +1918,30 @@
       const settings = this.settingsStore.get();
       const cacheEntries = listRuleCacheEntries(this.root);
       const currentCache = cacheEntries[this.cacheIndex] || null;
-      if (this.selectorClicked(ROWS$1.permissionMode)) {
-        this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.unlockUseMeMode) });
+      if (this.selectorClicked(ROWS$2.permissionMode)) {
+        this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.dangerModeEnabled && settings.unlockUseMeMode) });
       }
-      if (this.checkboxClicked(ROWS$1.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
-      if (this.checkboxClicked(ROWS$1.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
-      if (settings.allowForeignItemRules !== false && this.checkboxClicked(ROWS$1.request)) this.update({ autoRequestForeignRules: !settings.autoRequestForeignRules });
-      if (currentCache && this.root.MouseIn(550, this.rowY(ROWS$1.selector) - 32, 700, 64)) {
+      if (this.checkboxClicked(ROWS$2.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
+      if (this.checkboxClicked(ROWS$2.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
+      if (settings.allowForeignItemRules !== false && this.checkboxClicked(ROWS$2.request)) this.update({ autoRequestForeignRules: !settings.autoRequestForeignRules });
+      if (currentCache && this.root.MouseIn(550, this.rowY(ROWS$2.selector) - 32, 700, 64)) {
         this.cacheIndex = this.getNewIndexFromNextPrevClick(900, this.cacheIndex, cacheEntries.length);
       }
-      if (currentCache && this.actionClicked(ROWS$1.cacheActions, CACHE_ACTIONS.deleteEntry)) {
+      if (currentCache && this.actionClicked(ROWS$2.cacheActions, CACHE_ACTIONS.deleteEntry)) {
         deleteCachedItemRules(this.root, currentCache.cacheKey);
         this.synchronizer.scheduleSync("runtime-cache-delete");
         this.cacheIndex = 0;
       }
-      if (this.actionClicked(ROWS$1.cacheActions, CACHE_ACTIONS.clearCache) && this.confirm(this.t("runtime.confirm.clearCache"))) {
+      if (this.actionClicked(ROWS$2.cacheActions, CACHE_ACTIONS.clearCache) && this.confirm(this.t("runtime.confirm.clearCache"))) {
         clearRuleCache(this.root);
         this.synchronizer.scheduleSync("runtime-cache-clear");
         this.cacheIndex = 0;
       }
-      if (this.actionClicked(ROWS$1.registryActions, REGISTRY_ACTIONS.exportRules)) this.copyJson(loadRegistry(this.root));
-      if (this.actionClicked(ROWS$1.registryActions, REGISTRY_ACTIONS.importRules)) this.importRegistry();
-      if (this.actionClicked(ROWS$1.settingsActions, SETTINGS_ACTIONS.exportSettings)) this.copyJson(this.settingsStore.get());
-      if (this.actionClicked(ROWS$1.settingsActions, SETTINGS_ACTIONS.importSettings)) this.importSettings();
-      if (this.rowButtonClicked(ROWS$1.back)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
+      if (this.actionClicked(ROWS$2.registryActions, REGISTRY_ACTIONS.exportRules)) this.copyJson(loadRegistry(this.root));
+      if (this.actionClicked(ROWS$2.registryActions, REGISTRY_ACTIONS.importRules)) this.importRegistry();
+      if (this.actionClicked(ROWS$2.settingsActions, SETTINGS_ACTIONS.exportSettings)) this.copyJson(this.settingsStore.get());
+      if (this.actionClicked(ROWS$2.settingsActions, SETTINGS_ACTIONS.importSettings)) this.importSettings();
+      if (this.rowButtonClicked(ROWS$2.back)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
     }
     update(patch) {
       this.settingsStore.update(patch);
@@ -1918,13 +1958,13 @@
       return modes[(index + 1) % modes.length];
     }
     drawCacheActions(hasCurrentCache) {
-      const y = this.rowY(ROWS$1.cacheActions) - 32;
+      const y = this.rowY(ROWS$2.cacheActions) - 32;
       this.drawButton(CACHE_ACTIONS.deleteEntry.x, y, CACHE_ACTIONS.deleteEntry.w, 64, this.t(CACHE_ACTIONS.deleteEntry.labelKey), this.t(CACHE_ACTIONS.deleteEntry.tooltipKey), !hasCurrentCache);
       this.drawButton(CACHE_ACTIONS.clearCache.x, y, CACHE_ACTIONS.clearCache.w, 64, this.t(CACHE_ACTIONS.clearCache.labelKey), this.t(CACHE_ACTIONS.clearCache.tooltipKey));
     }
     drawImportExportActions() {
-      const registryY = this.rowY(ROWS$1.registryActions) - 32;
-      const settingsY = this.rowY(ROWS$1.settingsActions) - 32;
+      const registryY = this.rowY(ROWS$2.registryActions) - 32;
+      const settingsY = this.rowY(ROWS$2.settingsActions) - 32;
       this.drawButton(REGISTRY_ACTIONS.exportRules.x, registryY, REGISTRY_ACTIONS.exportRules.w, 64, this.t(REGISTRY_ACTIONS.exportRules.labelKey), this.t(REGISTRY_ACTIONS.exportRules.tooltipKey));
       this.drawButton(REGISTRY_ACTIONS.importRules.x, registryY, REGISTRY_ACTIONS.importRules.w, 64, this.t(REGISTRY_ACTIONS.importRules.labelKey), this.t(REGISTRY_ACTIONS.importRules.tooltipKey));
       this.drawButton(SETTINGS_ACTIONS.exportSettings.x, settingsY, SETTINGS_ACTIONS.exportSettings.w, 64, this.t(SETTINGS_ACTIONS.exportSettings.labelKey), this.t(SETTINGS_ACTIONS.exportSettings.tooltipKey));
@@ -1974,7 +2014,7 @@
       return Number(this.root.MouseX) <= midpoint ? (listLength + currentIndex - 1) % listLength : (currentIndex + 1) % listLength;
     }
   }
-  const ROWS = {
+  const ROWS$1 = {
     bcx: 0,
     sync: 1,
     counts: 2,
@@ -1997,16 +2037,10 @@
     disableCleanup: { col: 0, row: 4, labelKey: "diagnostics.disableCleanup", tooltipKey: "diagnostics.disableCleanup.tip" },
     disableSharing: { col: 1, row: 4, labelKey: "diagnostics.disableSharing", tooltipKey: "diagnostics.disableSharing.tip" }
   };
-  const RIGHT_CHECKBOX_ROWS = {
-    useMeUnlock: 5,
-    suspendInactive: 6
-  };
   const LEFT_X = 380;
   const LEFT_LABEL_W = 560;
   const LEFT_CHECKBOX_X = 965;
   const RIGHT_X = 1090;
-  const RIGHT_LABEL_W = 470;
-  const RIGHT_CHECKBOX_X = 1630;
   const ACTION_W = 250;
   const ACTION_GAP = 24;
   const ACTION_ROW_H = 74;
@@ -2030,30 +2064,26 @@
       const sync = this.synchronizer.getDiagnostics();
       const transport = ((_a = this.itemRuleTransport) == null ? void 0 : _a.getDiagnostics()) || {};
       const authoring = (_b = this.authoring) == null ? void 0 : _b.getState();
-      this.drawLeftLabel(ROWS.bcx, this.t("diagnostics.bcx", {
+      this.drawLeftLabel(ROWS$1.bcx, this.t("diagnostics.bcx", {
         bcx: this.bcx.canUseBCX() ? this.t("common.available") : this.t("common.unavailable"),
         authoring: (authoring == null ? void 0 : authoring.status) || this.t("common.none")
       }));
-      this.drawLeftLabel(ROWS.sync, this.t("diagnostics.sync", {
+      this.drawLeftLabel(ROWS$1.sync, this.t("diagnostics.sync", {
         result: String(sync.lastSyncResult || this.t("common.notRun")),
         reason: String(sync.lastSyncReason || this.t("common.none"))
       }));
-      this.drawLeftLabel(ROWS.counts, this.t("diagnostics.counts", {
+      this.drawLeftLabel(ROWS$1.counts, this.t("diagnostics.counts", {
         payloads: String(sync.activePayloadCount || 0),
         managed: String(sync.managedRuleCount || 0),
         pending: String(transport.pendingRequestCount || 0)
       }));
-      this.drawLeftCheckbox(ROWS.messages1, this.t("diagnostics.conflicts"), this.t("diagnostics.conflicts.tip"), settings.showConflictMessages);
-      this.drawLeftCheckbox(ROWS.messages2, this.t("diagnostics.invalid"), this.t("diagnostics.invalid.tip"), settings.showInvalidPayloadMessages);
-      this.drawLeftCheckbox(ROWS.transport, this.t("diagnostics.transport"), this.t("diagnostics.transport.tip"), settings.showTransportMessages);
-      this.drawLeftCheckbox(ROWS.debug, this.t("diagnostics.debug"), this.t("diagnostics.debug.tip"), settings.debugLogging);
-      this.drawLeftCheckbox(ROWS.fallback, this.t("diagnostics.fallback"), this.t("diagnostics.fallback.tip"), settings.fallbackSyncEnabled);
-      this.drawLeftCheckbox(ROWS.cachedOffline, this.t("diagnostics.cachedOffline"), this.t("diagnostics.cachedOffline.tip"), settings.allowCachedOfflineCreator);
+      this.drawLeftCheckbox(ROWS$1.messages1, this.t("diagnostics.conflicts"), this.t("diagnostics.conflicts.tip"), settings.showConflictMessages);
+      this.drawLeftCheckbox(ROWS$1.messages2, this.t("diagnostics.invalid"), this.t("diagnostics.invalid.tip"), settings.showInvalidPayloadMessages);
+      this.drawLeftCheckbox(ROWS$1.transport, this.t("diagnostics.transport"), this.t("diagnostics.transport.tip"), settings.showTransportMessages);
+      this.drawLeftCheckbox(ROWS$1.debug, this.t("diagnostics.debug"), this.t("diagnostics.debug.tip"), settings.debugLogging);
+      this.drawLeftCheckbox(ROWS$1.fallback, this.t("diagnostics.fallback"), this.t("diagnostics.fallback.tip"), settings.fallbackSyncEnabled);
+      this.drawLeftCheckbox(ROWS$1.cachedOffline, this.t("diagnostics.cachedOffline"), this.t("diagnostics.cachedOffline.tip"), settings.allowCachedOfflineCreator);
       this.drawActionButtons();
-      this.drawRightCheckbox(RIGHT_CHECKBOX_ROWS.useMeUnlock, this.t("diagnostics.useMeUnlock"), this.t("diagnostics.useMeUnlock.tip"), settings.unlockUseMeMode);
-      if (settings.unlockUseMeMode) {
-        this.drawRightCheckbox(RIGHT_CHECKBOX_ROWS.suspendInactive, this.t("diagnostics.suspendInactive"), this.t("diagnostics.suspendInactive.tip"), settings.useMeSuspendInactiveConflicts);
-      }
       if ((authoring == null ? void 0 : authoring.status) && authoring.status !== "idle") {
         this.drawActionButton(ACTIONS.report, this.t("diagnostics.cancelAuth"), this.t("diagnostics.cancelAuth.tip"));
       }
@@ -2063,33 +2093,17 @@
       var _a, _b, _c, _d, _e, _f;
       super.click();
       const settings = this.settingsStore.get();
-      if (this.leftCheckboxClicked(ROWS.messages1)) this.settingsStore.update({ showConflictMessages: !settings.showConflictMessages });
-      if (this.leftCheckboxClicked(ROWS.messages2)) this.settingsStore.update({ showInvalidPayloadMessages: !settings.showInvalidPayloadMessages });
-      if (this.leftCheckboxClicked(ROWS.transport)) this.settingsStore.update({ showTransportMessages: !settings.showTransportMessages });
-      if (this.leftCheckboxClicked(ROWS.debug)) this.settingsStore.update({ debugLogging: !settings.debugLogging });
-      if (this.leftCheckboxClicked(ROWS.fallback)) {
+      if (this.leftCheckboxClicked(ROWS$1.messages1)) this.settingsStore.update({ showConflictMessages: !settings.showConflictMessages });
+      if (this.leftCheckboxClicked(ROWS$1.messages2)) this.settingsStore.update({ showInvalidPayloadMessages: !settings.showInvalidPayloadMessages });
+      if (this.leftCheckboxClicked(ROWS$1.transport)) this.settingsStore.update({ showTransportMessages: !settings.showTransportMessages });
+      if (this.leftCheckboxClicked(ROWS$1.debug)) this.settingsStore.update({ debugLogging: !settings.debugLogging });
+      if (this.leftCheckboxClicked(ROWS$1.fallback)) {
         this.settingsStore.update({ fallbackSyncEnabled: !settings.fallbackSyncEnabled });
         this.synchronizer.startFallbackTimer();
       }
-      if (this.leftCheckboxClicked(ROWS.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
+      if (this.leftCheckboxClicked(ROWS$1.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
         this.settingsStore.update({ allowCachedOfflineCreator: !settings.allowCachedOfflineCreator });
         this.synchronizer.scheduleSync("diagnostics-cached-offline");
-      }
-      if (this.rightCheckboxClicked(RIGHT_CHECKBOX_ROWS.useMeUnlock)) {
-        if (settings.unlockUseMeMode) {
-          this.settingsStore.update({
-            unlockUseMeMode: false,
-            useMeSuspendInactiveConflicts: false,
-            rulePermissionMode: settings.rulePermissionMode === "useMe" ? "creator" : settings.rulePermissionMode
-          });
-          this.synchronizer.scheduleSync("diagnostics-useme-lock");
-        } else if (this.confirm(this.t("diagnostics.confirm.useMeUnlock"))) {
-          this.settingsStore.update({ unlockUseMeMode: true });
-        }
-      }
-      if (settings.unlockUseMeMode && this.rightCheckboxClicked(RIGHT_CHECKBOX_ROWS.suspendInactive) && (!settings.useMeSuspendInactiveConflicts || this.confirm(this.t("diagnostics.confirm.suspendInactive")))) {
-        this.settingsStore.update({ useMeSuspendInactiveConflicts: !settings.useMeSuspendInactiveConflicts });
-        this.synchronizer.scheduleSync("diagnostics-suspend-inactive");
       }
       if (this.actionClicked(ACTIONS.syncNow)) void this.synchronizer.syncNow("diagnostics");
       if (this.actionClicked(ACTIONS.retry)) {
@@ -2167,17 +2181,6 @@
     leftCheckboxClicked(row) {
       return this.mouseIn(LEFT_CHECKBOX_X, this.rowY(row) - 32, 64, 64);
     }
-    drawRightCheckbox(row, label, description, value) {
-      const y = ACTION_START_Y + row * ACTION_ROW_H + 32;
-      const hovering = this.mouseIn(RIGHT_X, y - 32, RIGHT_LABEL_W + 64, 64);
-      this.root.DrawTextFit(label, RIGHT_X, y, RIGHT_LABEL_W, hovering ? "Red" : "Black", "Gray");
-      this.root.DrawCheckbox(RIGHT_CHECKBOX_X, y - 32, 64, 64, "", value, false);
-      if (hovering) this.drawTooltip(description);
-    }
-    rightCheckboxClicked(row) {
-      const y = ACTION_START_Y + row * ACTION_ROW_H + 32;
-      return this.mouseIn(RIGHT_CHECKBOX_X, y - 32, 64, 64);
-    }
     copyReport() {
       var _a, _b, _c;
       const text = JSON.stringify({
@@ -2190,6 +2193,86 @@
       const clipboard = (_c = this.root.navigator) == null ? void 0 : _c.clipboard;
       if (clipboard && typeof clipboard.writeText === "function") void clipboard.writeText(text).catch(() => void 0);
       else if (typeof this.root.prompt === "function") this.root.prompt(this.t("diagnostics.prompt.report"), text);
+    }
+    confirm(message) {
+      return typeof this.root.confirm === "function" ? this.root.confirm(message) === true : true;
+    }
+  }
+  const ROWS = {
+    intro: 0,
+    master: 2,
+    useMe: 3,
+    replaceInactive: 4,
+    summary: 6,
+    back: 7
+  };
+  class SettingsDangerScreen extends SettingsScreen {
+    constructor(registry, settingsStore, synchronizer) {
+      super(registry);
+      this.settingsStore = settingsStore;
+      this.synchronizer = synchronizer;
+    }
+    get title() {
+      return this.t("danger.title");
+    }
+    run() {
+      super.run();
+      const settings = this.settingsStore.get();
+      this.drawLabel(ROWS.intro, this.t("danger.warning"), this.t("danger.warning.tip"));
+      this.drawCheckbox(
+        ROWS.master,
+        this.t("danger.master"),
+        this.t("danger.master.tip"),
+        settings.dangerModeEnabled
+      );
+      this.drawCheckbox(
+        ROWS.useMe,
+        this.t("danger.useMe"),
+        settings.dangerModeEnabled ? this.t("danger.useMe.tip") : this.t("danger.useMe.disabled.tip"),
+        settings.unlockUseMeMode,
+        !settings.dangerModeEnabled
+      );
+      this.drawCheckbox(
+        ROWS.replaceInactive,
+        this.t("danger.replaceInactive"),
+        settings.dangerModeEnabled ? this.t("danger.replaceInactive.tip") : this.t("danger.replaceInactive.disabled.tip"),
+        settings.useMeSuspendInactiveConflicts,
+        !settings.dangerModeEnabled
+      );
+      this.drawLabel(ROWS.summary, this.t("danger.summary"));
+      this.drawRowButton(ROWS.back, this.t("common.back"), this.t("settings.tooltip.back"));
+    }
+    click() {
+      var _a, _b;
+      super.click();
+      const settings = this.settingsStore.get();
+      if (this.checkboxClicked(ROWS.master)) {
+        if (settings.dangerModeEnabled) {
+          this.settingsStore.update({
+            dangerModeEnabled: false,
+            unlockUseMeMode: false,
+            useMeSuspendInactiveConflicts: false,
+            rulePermissionMode: settings.rulePermissionMode === "useMe" ? "creator" : settings.rulePermissionMode
+          });
+          this.synchronizer.scheduleSync("danger-disable");
+        } else if (this.confirm(this.t("danger.confirm.master"))) {
+          this.settingsStore.update({ dangerModeEnabled: true });
+        }
+      }
+      if (settings.dangerModeEnabled && this.checkboxClicked(ROWS.useMe)) {
+        if (!settings.unlockUseMeMode && !this.confirm(this.t("danger.confirm.useMe"))) return;
+        this.settingsStore.update({
+          unlockUseMeMode: !settings.unlockUseMeMode,
+          rulePermissionMode: settings.unlockUseMeMode && settings.rulePermissionMode === "useMe" ? "creator" : settings.rulePermissionMode
+        });
+        this.synchronizer.scheduleSync("danger-useme-toggle");
+      }
+      if (settings.dangerModeEnabled && this.checkboxClicked(ROWS.replaceInactive)) {
+        if (!settings.useMeSuspendInactiveConflicts && !this.confirm(this.t("danger.confirm.replaceInactive"))) return;
+        this.settingsStore.update({ useMeSuspendInactiveConflicts: !settings.useMeSuspendInactiveConflicts });
+        this.synchronizer.scheduleSync("danger-replace-inactive");
+      }
+      if (this.rowButtonClicked(ROWS.back)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
     }
     confirm(message) {
       return typeof this.root.confirm === "function" ? this.root.confirm(message) === true : true;
@@ -2273,6 +2356,8 @@
         this.current = new SettingsRuntimeScreen(this, this.settingsStore, this.synchronizer);
       } else if (screenName === "diagnostics") {
         this.current = new SettingsDiagnosticsScreen(this, this.settingsStore, this.bcx, this.synchronizer, this.authoring, this.itemRuleTransport);
+      } else if (screenName === "danger") {
+        this.current = new SettingsDangerScreen(this, this.settingsStore, this.synchronizer);
       } else {
         this.current = new SettingsMainScreen(
           this,

@@ -3,14 +3,15 @@
 ## Summary
 
 - Add an advanced opt-in `Please use me` permission mode.
-- The mode is locked by default and appears in Runtime only after the user enables the warning-gated unlock in Diagnostics / Advanced.
+- Dangerous Mode has a master switch. `Please use me` and `Replacement Mode` are two independent child switches that can only be changed after the master switch is enabled.
+- The `Please use me` runtime mode appears only after Dangerous Mode and the `Please use me` child switch are both enabled.
 - It applies BCXIR item rules through BCX's own hidden-query handlers with a temporary local operator character.
 - It does not directly edit `Player.ExtensionSettings.BCX`.
 
 ## Behavior
 
 - Normal modes remain unchanged: `Item creator` and `Myself`.
-- When unlocked, Runtime cycles through `Item creator`, `Myself`, and `Please use me`.
+- When Dangerous Mode and `Please use me` are enabled, Runtime cycles through `Item creator`, `Myself`, and `Please use me`.
 - `Please use me` temporarily inserts a local operator character into `ChatRoomCharacter` for the query batch.
 - During that batch, BCXIR allows the operator to access the player locally and makes it resolve as a high-trust local owner identity.
 - The operator is not drawn, not synced to the server, and is removed in `finally`-style cleanup after the query resolves or times out.
@@ -26,6 +27,7 @@
 
 ```ts
 rulePermissionMode: "creator" | "self" | "useMe"
+dangerModeEnabled: boolean
 unlockUseMeMode: boolean
 useMeSuspendInactiveConflicts: boolean
 ```
@@ -33,13 +35,14 @@ useMeSuspendInactiveConflicts: boolean
 Defaults:
 
 - `rulePermissionMode: "creator"`
+- `dangerModeEnabled: false`
 - `unlockUseMeMode: false`
 - `useMeSuspendInactiveConflicts: false`
 
 Normalization:
 
-- If `unlockUseMeMode` is false, stored `rulePermissionMode: "useMe"` falls back to `"creator"`.
-- If `unlockUseMeMode` is false, `useMeSuspendInactiveConflicts` is forced false.
+- If `dangerModeEnabled` is false, `unlockUseMeMode` and `useMeSuspendInactiveConflicts` are forced false.
+- If `dangerModeEnabled` or `unlockUseMeMode` is false, stored `rulePermissionMode: "useMe"` falls back to `"creator"`.
 
 ## Safety
 

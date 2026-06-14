@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: BCXIRSettings = {
   fallbackSyncEnabled: true,
   rulePermissionMode: "creator",
   allowCachedOfflineCreator: true,
+  dangerModeEnabled: false,
   unlockUseMeMode: false,
   useMeSuspendInactiveConflicts: false,
   allowForeignItemRules: true,
@@ -47,7 +48,8 @@ function getLz(root: HostWindow): Pick<NonNullable<Window["LZString"]>, "compres
 
 export function normalizeSettings(value: unknown): BCXIRSettings {
   const source = isPlainObject(value) ? value : {};
-  const unlockUseMeMode = source.unlockUseMeMode === true;
+  const dangerModeEnabled = source.dangerModeEnabled === true;
+  const unlockUseMeMode = dangerModeEnabled && source.unlockUseMeMode === true;
   const rulePermissionMode = source.rulePermissionMode === "self"
     ? "self"
     : source.rulePermissionMode === "useMe" && unlockUseMeMode
@@ -63,8 +65,9 @@ export function normalizeSettings(value: unknown): BCXIRSettings {
     fallbackSyncEnabled: source.fallbackSyncEnabled !== false,
     rulePermissionMode,
     allowCachedOfflineCreator: source.allowCachedOfflineCreator !== false,
+    dangerModeEnabled,
     unlockUseMeMode,
-    useMeSuspendInactiveConflicts: unlockUseMeMode && source.useMeSuspendInactiveConflicts === true,
+    useMeSuspendInactiveConflicts: dangerModeEnabled && source.useMeSuspendInactiveConflicts === true,
     allowForeignItemRules: source.allowForeignItemRules !== false,
     respondToRuleRequests: source.respondToRuleRequests !== false,
     autoRequestForeignRules: source.autoRequestForeignRules !== false,

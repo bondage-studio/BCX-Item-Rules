@@ -114,8 +114,9 @@ Player.ExtensionSettings.BCX
 - Rules managed by BCXIR are restored or deleted conservatively when items are removed.
 - The virtual authoring character is local-only and temporary.
 - Remote responses are validated against the item's creator member number.
-- `Please use me` is an advanced opt-in mode. It uses a temporary local operator to apply item rules through BCX even when normal BCX permission checks would block self changes.
-- `Please use me` still does not overwrite existing active or unmanaged rules. With the separate inactive-suspend option enabled, existing inactive same-name rules can be temporarily replaced and restored when the item rule is removed.
+- `Dangerous Mode` is a separate opt-in settings page. Its master switch must be enabled before either risky option can be used.
+- `Please use me` is controlled by its own switch under Dangerous Mode. It uses a temporary local operator to apply item rules through BCX even when normal BCX permission checks would block self changes.
+- `Replacement Mode` is controlled by a separate switch under Dangerous Mode. Existing active rules are still protected; only inactive same-name rules may be temporarily replaced and restored when the item rule is removed.
 
 ## Public API
 
@@ -313,8 +314,9 @@ Player.ExtensionSettings.BCX
 - 道具移除后，BCXIR 会保守恢复或删除自己管理的规则。
 - 虚拟编辑角色只存在于本地、临时会话中。
 - 远端 response 会校验是否来自道具制作者。
-- “请使用我”是高级 opt-in 模式。它会使用本地临时操作者通过 BCX 应用道具规则，即使普通 BCX 权限检查会阻止自己修改。
-- “请使用我”仍不会覆盖已有 active 或非 BCXIR 管理规则。若另外开启 inactive 挂起选项，已有同名 inactive 规则会被临时替换，并在道具规则移除后恢复。
+- “危险模式”是独立的 opt-in 设置页面。必须先打开总开关，才能使用下面两个有风险的选项。
+- “请使用我”由危险模式中的独立开关控制。它会使用本地临时操作者通过 BCX 应用道具规则，即使普通 BCX 权限检查会阻止自己修改。
+- “替换模式”由危险模式中的另一个独立开关控制。已有 active 规则仍会被保护；只有同名 inactive 规则可能被临时替换，并在道具规则移除后恢复。
 
 ## Public API
 

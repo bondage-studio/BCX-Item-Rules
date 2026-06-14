@@ -107,6 +107,7 @@ export interface BCXIRSettings {
   fallbackSyncEnabled: boolean;
   rulePermissionMode: "creator" | "self" | "useMe";
   allowCachedOfflineCreator: boolean;
+  dangerModeEnabled: boolean;
   unlockUseMeMode: boolean;
   useMeSuspendInactiveConflicts: boolean;
   allowForeignItemRules: boolean;

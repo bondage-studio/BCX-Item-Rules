@@ -82,6 +82,7 @@ export class RuleSynchronizer {
 
       if (!managed && current) {
         const canSuspendInactive = applyContext.context.kind === "useMe" &&
+          settings.dangerModeEnabled === true &&
           settings.unlockUseMeMode === true &&
           settings.useMeSuspendInactiveConflicts === true &&
           comparableCurrent?.active === false;
@@ -324,7 +325,7 @@ export class RuleSynchronizer {
     settings: BCXIRSettings,
   ): { context: RuleQueryContext; senderMemberNumber: number | null; allowMinimalCreator: boolean } | null {
     const playerNumber = this.getPlayerMemberNumber();
-    if (settings.rulePermissionMode === "useMe" && settings.unlockUseMeMode === true) {
+    if (settings.rulePermissionMode === "useMe" && settings.dangerModeEnabled === true && settings.unlockUseMeMode === true) {
       return { context: { kind: "useMe" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
     }
     if (settings.rulePermissionMode === "self") {

@@ -12,7 +12,8 @@ const ROWS = {
   enabled: 3,
   itemRules: 4,
   runtime: 5,
-  diagnostics: 6,
+  danger: 6,
+  diagnostics: 7,
 } as const;
 
 export class SettingsMainScreen extends SettingsScreen {
@@ -48,6 +49,7 @@ export class SettingsMainScreen extends SettingsScreen {
     );
     this.drawWideButton(ROWS.itemRules, this.t("main.itemRules"), this.t("main.itemRules.tip"));
     this.drawWideButton(ROWS.runtime, this.t("main.runtime"), this.t("main.runtime.tip"));
+    this.drawWideButton(ROWS.danger, this.t("main.danger"), this.t("main.danger.tip"));
     this.drawWideButton(ROWS.diagnostics, this.t("main.diagnostics"), this.t("main.diagnostics.tip"));
   }
 
@@ -57,6 +59,7 @@ export class SettingsMainScreen extends SettingsScreen {
     if (this.checkboxClicked(ROWS.enabled)) this.update({ enabled: !settings.enabled });
     if (this.wideButtonClicked(ROWS.itemRules)) this.registry.setScreen?.("itemRules");
     if (this.wideButtonClicked(ROWS.runtime)) this.registry.setScreen?.("runtime");
+    if (this.wideButtonClicked(ROWS.danger)) this.registry.setScreen?.("danger");
     if (this.wideButtonClicked(ROWS.diagnostics)) this.registry.setScreen?.("diagnostics");
   }
 
