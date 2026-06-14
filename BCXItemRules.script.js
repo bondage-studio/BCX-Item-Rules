@@ -4155,7 +4155,8 @@
     let settingsInitialized = false;
     root.BCXItemRules = buildPublicApi(root, synchronizer, settingsStore, settingsRegistry, authoring, itemRuleTransport);
     const waitForGameReady = () => {
-      if (root.Player && !settingsInitialized) {
+      var _a;
+      if (((_a = root.Player) == null ? void 0 : _a.MemberNumber) != null && !settingsInitialized) {
         settingsStore.load();
         settingsRegistry.register();
         settingsInitialized = true;

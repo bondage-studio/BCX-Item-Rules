@@ -29,7 +29,13 @@ export function bootstrap(): void {
   root.BCXItemRules = buildPublicApi(root, synchronizer, settingsStore, settingsRegistry, authoring, itemRuleTransport);
 
   const waitForGameReady = (): void => {
-    if (root.Player && !settingsInitialized) {
+    // Wait for a logged-in Player before loading settings. BC exposes a truthy
+    // `Player` object at the login screen (no MemberNumber, empty ExtensionSettings),
+    // so loading on `root.Player` alone reads nothing, keys the localStorage backup
+    // under "DEFAULT", and latches `settingsInitialized`, permanently dropping the
+    // per-member settings. MemberNumber is set together with ExtensionSettings in
+    // BC's LoginResponse, so it is the reliable "settings are available" signal.
+    if (root.Player?.MemberNumber != null && !settingsInitialized) {
       settingsStore.load();
       settingsRegistry.register();
       settingsInitialized = true;

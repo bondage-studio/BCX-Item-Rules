@@ -766,4 +766,60 @@ assert.equal(await api.openAuthoring(), false);
 assert.equal(api.cancelAuthoring(), false);
 assert.equal(await api.finishAuthoring(), null);
 
+// Regression: settings must survive a page reload even when the bootstrap tick
+// fires while BC is still at the login screen (Player truthy, no MemberNumber).
+// Previously the eager load read nothing, keyed the backup under "DEFAULT", and
+// latched initialization, so every per-member setting reverted to defaults.
+{
+  const reloadLocalStore = new Map();
+  const reloadServerExt = {};
+  const buildReloadContext = (player) => {
+    const win = {
+      LZString: fakeLz,
+      localStorage: {
+        getItem: (k) => reloadLocalStore.get(k) || null,
+        setItem: (k, v) => reloadLocalStore.set(k, v),
+        removeItem: (k) => reloadLocalStore.delete(k),
+      },
+      Player: player,
+      setTimeout: (cb) => { win.__timers.push(cb); return win.__timers.length; },
+      clearTimeout() {},
+      setInterval() {},
+      ServerPlayerExtensionSettingsSync(key) { reloadServerExt[key] = win.Player.ExtensionSettings[key]; },
+      PreferenceRegisterExtensionSetting() {},
+      document: { getElementById: () => null, body: { appendChild() {} }, createElement: () => ({ style: { setProperty() {} }, addEventListener() {}, remove() {} }) },
+      __timers: [],
+    };
+    win.window = win;
+    const reloadCtx = { console, window: win, LZString: fakeLz };
+    reloadCtx.unsafeWindow = win;
+    reloadCtx.globalThis = win;
+    vm.createContext(reloadCtx);
+    vm.runInContext(source, reloadCtx);
+    return win;
+  };
+  const fireTimers = (win, count) => {
+    for (let i = 0; i < count && win.__timers.length; i++) win.__timers.shift()();
+  };
+
+  // Session 1: logged in, change settings.
+  const session1 = buildReloadContext({ MemberNumber: 778899, ExtensionSettings: {}, Appearance: [] });
+  fireTimers(session1, 1);
+  session1.BCXItemRules.updateSettings({ dangerModeEnabled: true, debugLogging: true, enabled: false });
+  assert.equal(reloadServerExt.BCXIR != null, true);
+  assert.equal([...reloadLocalStore.keys()].includes("BCXIR_778899_backup"), true);
+
+  // Session 2: reload, first tick happens pre-login (Player has no MemberNumber yet).
+  const session2 = buildReloadContext({ ExtensionSettings: {}, Appearance: [] });
+  fireTimers(session2, 1);
+  assert.equal(session2.BCXItemRules.getSettings().dangerModeEnabled, false); // nothing loaded yet, correctly
+  // Login completes: BC populates MemberNumber and restores ExtensionSettings.
+  session2.Player.MemberNumber = 778899;
+  session2.Player.ExtensionSettings = { BCXIR: reloadServerExt.BCXIR };
+  fireTimers(session2, 5);
+  assert.equal(session2.BCXItemRules.getSettings().dangerModeEnabled, true);
+  assert.equal(session2.BCXItemRules.getSettings().debugLogging, true);
+  assert.equal(session2.BCXItemRules.getSettings().enabled, false);
+}
+
 console.log("BCXIR core tests passed");
