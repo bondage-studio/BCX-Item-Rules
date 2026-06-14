@@ -6,6 +6,8 @@ export class VirtualCharacterManager {
   private character: any | null = null;
   private originalAllowItem: any = null;
   private permissionHookInstalled = false;
+  private previousInformationSheetSelection: any = null;
+  private hadPreviousInformationSheetSelection = false;
 
   constructor(private readonly root: HostWindow) {}
 
@@ -34,13 +36,13 @@ export class VirtualCharacterManager {
     this.character = character;
     this.installPermissionHook();
     this.insertIntoRoom(character);
-    this.announceBCX(character);
     return character;
   }
 
   remove(): void {
     const character = this.character;
     if (!character) return;
+    this.restoreInformationSheetSelection(character);
     this.removeFromArray("ChatRoomCharacter", character);
     this.removeFromArray("ChatRoomCharacterDrawlist", character);
     this.character = null;
@@ -51,6 +53,10 @@ export class VirtualCharacterManager {
     const character = this.character;
     if (!character) return false;
     try {
+      if (!this.hadPreviousInformationSheetSelection) {
+        this.previousInformationSheetSelection = this.root.InformationSheetSelection;
+        this.hadPreviousInformationSheetSelection = true;
+      }
       this.root.InformationSheetSelection = character;
       if (typeof this.root.InformationSheetLoad === "function") {
         this.root.InformationSheetLoad(character);
@@ -62,6 +68,39 @@ export class VirtualCharacterManager {
     } catch (error) {
       console.warn("[BCXIR] Failed to open virtual character information sheet.", error);
       return false;
+    }
+  }
+
+  private restoreInformationSheetSelection(character: any): void {
+    if (this.isVirtualSelection(this.root.InformationSheetSelection, character)) {
+      const previous = this.isVirtualSelection(this.previousInformationSheetSelection, character)
+        ? null
+        : this.previousInformationSheetSelection;
+      this.root.InformationSheetSelection = previous || this.root.Player || null;
+    }
+    this.previousInformationSheetSelection = null;
+    this.hadPreviousInformationSheetSelection = false;
+  }
+
+  private isVirtualSelection(selection: any, character: any): boolean {
+    return selection === character || selection?.MemberNumber === VIRTUAL_MEMBER_NUMBER;
+  }
+
+  openBCXMenuFromInformationSheet(): boolean {
+    if (!this.character || typeof this.root.InformationSheetClick !== "function") return false;
+    const previousX = this.root.MouseX;
+    const previousY = this.root.MouseY;
+    try {
+      this.root.MouseX = 1820;
+      this.root.MouseY = 690;
+      this.root.InformationSheetClick();
+      return true;
+    } catch (error) {
+      console.warn("[BCXIR] Failed to auto-open virtual character BCX menu.", error);
+      return false;
+    } finally {
+      this.root.MouseX = previousX;
+      this.root.MouseY = previousY;
     }
   }
 
@@ -105,27 +144,4 @@ export class VirtualCharacterManager {
     this.permissionHookInstalled = false;
   }
 
-  private announceBCX(character: any): void {
-    const version = this.root.bcx?.version || this.root.bcx?.versionParsed?.major || "virtual";
-    const data = {
-      Type: "Hidden",
-      Content: "BCXMsg",
-      Sender: character.MemberNumber,
-      Dictionary: {
-        type: "hello",
-        message: {
-          version: String(version),
-          request: false,
-          effects: { Effect: [] },
-          typingIndicatorEnable: false,
-          screenIndicatorEnable: false,
-        },
-      },
-    };
-    try {
-      if (typeof this.root.ChatRoomMessage === "function") this.root.ChatRoomMessage(data);
-    } catch {
-      /* Best effort only. */
-    }
-  }
 }

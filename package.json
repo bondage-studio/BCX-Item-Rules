@@ -2,7 +2,7 @@
   "name": "bcx-item-rules",
   "version": "0.1.0",
   "private": true,
-  "description": "Portable BCX rule payloads embedded in Bondage Club crafted item descriptions.",
+  "description": "BCX rules for Bondage Club crafted items using a local item-name registry.",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -10,6 +10,9 @@
     "check": "tsc --noEmit",
     "test": "npm run build && node test-core.mjs",
     "clean": "node scripts/clean.mjs"
+  },
+  "bcxir": {
+    "remoteBase": "https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

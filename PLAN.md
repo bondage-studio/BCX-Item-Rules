@@ -1,27 +1,30 @@
-# BCX Item Rules 独立插件协议方案
+# BCX Item Rules Project Plan
 
 ## Summary
 
-- 做成独立 Bondage Club userscript，不依赖 VPW。
-- 道具规则写入“被穿戴道具”的 craft metadata；只有同时安装本插件与 BCX 的玩家，在自己穿戴该道具时才解析并应用规则。
-- 不直接写 BCX 内部 storage；通过 BCX 公共接口 `window.bcx.getModApi()` 与 query API 操作规则，降低版本冲突风险。
-- 默认采取保守冲突策略：不覆盖玩家已有规则，不删除非本插件管理的规则。
+- Standalone Bondage Club userscript, independent from Vivian's Portable Wardrobe.
+- Published as a loader plus online script: users install `BCXItemRules.loader.user.js`, which fetches `BCXItemRules.script.js` with cache-busting query parameters.
+- Applies BCX rules to the local player while they wear crafted items whose names resolve to BCXIR payloads.
+- Uses LSCG-style local registration and private request/response communication instead of storing payloads in `Craft.Description`.
+- Does not write BCX internal storage or `Player.ExtensionSettings.BCX`.
+- Keeps the existing conservative conflict behavior: do not overwrite user-owned rules, and do not delete rules not managed by BCXIR.
 
-## Public Protocol
+## Current Protocol
 
-- 在 crafted item 的 `Craft.Description` 末尾嵌入标记：
+The primary protocol is local registry plus item-rule request beeps:
 
-```text
-[BCXIR:v1:<encoded>]
-```
+- Creator registry: `localStorage["BCXIR_registry_<MemberNumber>"]`.
+- Wearer cache: `localStorage["BCXIR_rule_cache_<MemberNumber>"]`.
+- Registry key: crafted item name, normalized case-insensitively.
+- Matching: LSCG-style case-insensitive phrase match against item name plus description text.
+- Wire format: LSCG-style private `AccountBeep` with `BeepType: "Leash"` and `Message.IsBCXIR === true`.
+- Request command: `bcxir-item-rules-request`.
+- Response command: `bcxir-item-rules-response`.
+- Missing responses use per-crafter/item exponential cooldown to avoid repeated polling pressure.
 
-- `<encoded>` 为：
+Description marker compatibility has been removed. Old `[BCXIR:v1:<encoded>]` markers are ignored and are no longer documented as a supported storage path.
 
-```js
-LZString.compressToEncodedURIComponent(JSON.stringify(compactPayload))
-```
-
-- 线格式使用紧凑 schema：
+## Payload Shape
 
 ```ts
 type EncodedPayload = {
@@ -32,7 +35,7 @@ type EncodedPayload = {
     e?: 0 | 1
     l?: 0 | 1
     d?: Record<string, unknown>
-    q?: ConditionsRequirements | null
+    q?: Record<string, unknown> | null
     t?: number | null
     tr?: 0 | 1
     p?: number
@@ -40,126 +43,89 @@ type EncodedPayload = {
 }
 ```
 
-- UI/authoring layer may expose expanded names, but stored payload must remain compact to fit craft description limits.
-
 ## Runtime Behavior
 
-- On `CharacterRefresh`, room sync, wardrobe apply, and a low-frequency fallback tick, scan `Player.Appearance`.
+- On `CharacterRefresh`, room sync, wardrobe apply, and fallback ticks, scan `Player.Appearance`.
 - Only inspect worn items with `item.Asset.Group.Category === "Item"` by default.
-- Parse every valid `BCXIR` marker, validate each `rule` with `bcx.getModApi(modName).getRuleState(rule)` or `conditionsGet`.
-- Compute desired active rule set as the union of all currently worn item payloads.
-- Apply through BCX queries to `"Player"`:
-  - `ruleCreate(ruleId)` if the rule is absent.
-  - `conditionUpdate({ category: "rules", condition: ruleId, data })` to set `active/timer/timerRemove/requirements/favorite/data`.
-  - Avoid `export_import_do_import` for live updates because BCX’s import path can remove rules missing from the imported category.
+- Self-crafted item: resolve payload from the local registry.
+- Other-crafted item: resolve payload from local cache, or request it from `item.Craft.MemberNumber`.
+- Received responses are accepted only from the item crafter and cached locally.
+- Repeated unresolved requests cool down from 30 seconds up to 10 minutes per crafter/item.
+- Per-item `selfOnly` registry entries do not answer other players' requests.
+- `allowForeignItemRules=false` disables remote requests, remote cache application, and cached offline creator identities.
+- Desired active rules are computed from all registry/cache payloads for currently worn items.
+- Apply through BCX public Mod API queries in self mode, or through a controlled local BCX hidden-message query in creator mode so BCX sees the item creator as `sender`.
+- Cached remote item rules can keep applying when the creator is offline by temporarily inserting a minimal local creator character into `ChatRoomCharacter`; this character is not drawn, synced, or granted forced item permission.
 
 ## Conflict Handling
 
-- Maintain local plugin state keyed by player member number:
-  - active item payload IDs
-  - rules managed by this plugin
-  - previous BCX condition snapshot before first plugin change
-  - last plugin-applied condition snapshot
-- If a desired rule already exists and is not recorded as plugin-managed, skip it and show/report a conflict.
+- Maintain local managed state keyed by player member number.
+- If a desired rule already exists and is not plugin-managed, skip it and report a conflict.
 - If multiple worn items request the same rule:
   - exact same config dedupes cleanly
   - highest `p` wins
   - equal priority with different config becomes a conflict and is skipped
 - When an item is removed:
-  - if no remaining worn item needs that rule, restore the previous BCX snapshot
-  - if no previous snapshot existed, delete only plugin-created rules
-  - if user changed the rule after plugin application, do not overwrite or delete; release management and report conflict.
+  - restore the previous BCX snapshot when one exists
+  - delete only plugin-created rules when no previous snapshot exists
+  - release management if the user changed the rule after plugin application
 
-## Test Plan
-
-- Encode/decode round trip preserves human craft description and payload.
-- Invalid marker, unknown rule, malformed `customData`, oversized payload, and missing BCX all fail gracefully.
-- Wearing one item creates/applies its BCX rule; removing it restores or deletes according to previous state.
-- Existing user rule is not overwritten.
-- Two items with same rule/same config dedupe; same rule/different config triggers priority or conflict behavior.
-- BCX permission/limit failures from `ruleCreate` or `conditionUpdate` are surfaced without retry loops.
-
-## Assumptions
-
-- Protocol-only scope for this step; full authoring UI and new project scaffolding are separate implementation work.
-- BCX remains installed and available as `window.bcx`.
-- Rules apply only to the local player wearing the item.
-- Craft description is the primary portable storage location because arbitrary custom fields on item/property/craft may be stripped or collide with BC/BCX validation.
-
-## Settings Page Integration Plan
-
-### Summary
-
-- Do not register into BCX's private menu internals; BCX's public API does not expose a menu-extension contract.
-- Register `BCXIR Settings` in Bondage Club's native extension settings menu with `PreferenceRegisterExtensionSetting`.
-- Keep the settings page independent from BCX UI while showing BCX availability in the page.
-- Store BCXIR settings in `Player.ExtensionSettings.BCXIR`, never in `Player.ExtensionSettings.BCX`.
-
-### Settings Schema
-
-```ts
-type BCXIRSettings = {
-  v: 1
-  enabled: boolean
-  scanItemCategoryOnly: boolean
-  showConflictMessages: boolean
-  showInvalidPayloadMessages: boolean
-  debugLogging: boolean
-  fallbackSyncEnabled: boolean
-}
-```
-
-Defaults:
-- `enabled: true`
-- `scanItemCategoryOnly: true`
-- `showConflictMessages: true`
-- `showInvalidPayloadMessages: true`
-- `debugLogging: false`
-- `fallbackSyncEnabled: true`
-
-### Implementation Notes
-
-- Add a lightweight settings registry with `load/run/click/exit/unload` lifecycle callbacks.
-- Add a BC canvas-style settings screen base with checkbox and label rendering, leaving room for future text/dropdown/range controls.
-- Save settings as `LZString.compressToBase64(JSON.stringify(settings))`.
-- Sync settings with `ServerPlayerExtensionSettingsSync("BCXIR")`.
-- Keep a local backup at `localStorage["BCXIR_<MemberNumber>_backup"]`.
-- Expose `getSettings`, `updateSettings`, and `openSettings` on `window.BCXItemRules`.
-
-### Runtime Integration
-
-- If `enabled` is false, stop applying new item payloads and run the existing cleanup/restore path for plugin-managed rules.
-- Use `scanItemCategoryOnly` to control whether scanner accepts only `Asset.Group.Category === "Item"`.
-- Use message toggles to suppress local conflict/invalid-payload messages without hiding console diagnostics.
-- Use `fallbackSyncEnabled` to control whether the periodic fallback sync timer starts.
-
-## Source Layout Plan
-
-The source tree is organized for later generated additions such as authoring UI, rule template editors, and diagnostics:
+## Source Layout
 
 ```text
 src/
   entry/      userscript entry point
   app/        bootstrap wiring and public API assembly
-  core/       protocol, scanner, condition conversion, synchronizer
+  core/       payload helpers, scanner, item registry/cache, synchronizer
+  authoring/  crafting hook, virtual BCX character authoring, export flow
   settings/   settings storage plus BC canvas settings screens
-  platform/   BC/BCX/browser adapters, hooks, reporter, root access
+  platform/   BC/BCX/browser adapters, hooks, reporter, transport, root access
   shared/     constants, shared types, utilities, local managed-state storage
 ```
 
-Dependency direction:
-- `entry` imports `app`.
-- `app` wires together `core`, `settings`, `platform`, and `shared`.
-- `core` stays protocol/runtime focused and depends only on `shared` plus platform adapters needed by the synchronizer.
-- `settings` owns UI and settings persistence; future generated settings pages should go under `src/settings/screens/`.
-- `platform` owns integrations with BC, BCX, ModSDK, and browser globals.
+## Settings
 
-## Virtual Character Authoring Plan
+- Register `BCXIR Settings` in Bondage Club's native extension settings menu with `PreferenceRegisterExtensionSetting`.
+- Store settings in `Player.ExtensionSettings.BCXIR`.
+- Keep local backup at `localStorage["BCXIR_<MemberNumber>_backup"]`.
+- Default rule permission mode is creator-based. Advanced settings can switch back to self mode or disable cached offline creator identities.
+- The settings menu owns item-rule registration through an LSCG-style `Item Rules` subpage.
+- Settings are split into overview, item rules, `Runtime / Sharing / Backup`, and `Diagnostics / Advanced` pages.
+- The menu is intentionally deduplicated: item registration only keeps registration/editing controls, daily runtime/sharing/backup controls share one page, and diagnostics/advanced cleanup share one troubleshooting page.
+- The non-item asset scan toggle is not exposed in the menu; the runtime keeps the default item-category-only behavior unless changed through lower-level APIs.
+- Settings UI text uses a local i18n table with English fallback and Simplified Chinese support, selected from BC/browser language globals.
+- Crafting/Create screen hooks are currently paused and not registered.
 
-- Add `src/authoring/` for crafting UI integration, virtual character lifecycle, virtual BCX query bridging, virtual rules storage, payload export, and clipboard copy.
-- In the crafting screen, add a `BCXIR Rules` button that starts a local authoring session.
-- The session creates a temporary `BCXIR Authoring` character in the local room and answers BCX hidden `query` messages for that virtual member number from an in-memory rules store.
-- The virtual store supports the BCX Rules UI query surface and keeps non-rules modules disabled or stubbed.
-- Finishing authoring converts active virtual rules to the compact BCXIR payload schema, copies the full marker to the clipboard, then removes the virtual character and bridge.
-- This path never writes `Player.ExtensionSettings.BCX`, never imports BCX data, and never modifies the player's own BCX rules.
-- Full notes are recorded in `docs/plans/BCXIR_VIRTUAL_CHARACTER_AUTHORING.md`.
+## Loader Build
+
+- `BCXItemRules.script.js` is the built runtime script.
+- `BCXItemRules.loader.user.js` is the installable userscript loader.
+- `BCXItemRules.user.js` is kept as a loader alias for older install paths.
+- Loader fetches `lz-string` and the runtime script with `GM_xmlhttpRequest`.
+- Loader appends `bcxirLoader=<version>&t=<Date.now()>` to remote URLs to avoid stale CDN/browser caches.
+- Hosted script base URL is configured by `package.json` `bcxir.remoteBase`.
+
+## Virtual Character Authoring
+
+- The `Item Rules` settings page opens the virtual BCX rule editor for the selected registered item name.
+- The authoring session creates a temporary local `BCXIR Authoring` room character.
+- After opening the virtual character Information Sheet, BCXIR triggers BCX's own Information Sheet button locally so the user lands in the BCX menu instead of stopping on bio/profile.
+- BCX hidden chat and beep traffic targeting the virtual member number is consumed locally and answered from an in-memory virtual rule store.
+- Finishing authoring exports active virtual rules into a compact payload and saves it into the creator's local registry under a confirmed item name.
+- Menu-launched authoring returns to the `Item Rules` settings subpage after finish or cancel.
+- Because BCX restores the Information Sheet asynchronously after `bcxSubscreenChange(false)`, BCXIR schedules a delayed idempotent restore back through `Character/Preference -> PreferenceOpenSubscreen("Extensions") -> PreferenceSubscreenExtensionsOpen("BCXIR") -> Item Rules` instead of restoring only inside the close callback.
+- The delayed restore reselects the item name that launched authoring, so the user returns to the same registry entry after editing.
+- The authoring path never modifies the player's own BCX rules.
+
+## Plan Files
+
+- `docs/plans/BCXIR_VIRTUAL_CHARACTER_AUTHORING.md`
+- `docs/plans/BCXIR_LSCG_STYLE_LOCAL_REGISTRY.md`
+- `docs/plans/BCXIR_CACHED_CREATOR_SENDER.md`
+- `docs/plans/BCXIR_MENU_ITEM_REGISTRY.md`
+- `docs/plans/BCXIR_AUTHORING_ENTRY_RETURN_FIX.md`
+- `docs/plans/BCXIR_DELAYED_ITEM_RULES_RESTORE.md`
+- `docs/plans/BCXIR_MENU_OPTIONS_UPDATE.md`
+- `docs/plans/BCXIR_MENU_DEDUP_SIMPLIFICATION.md`
+- `docs/plans/BCXIR_I18N.md`
+- `docs/plans/BCXIR_LOADER_BUILD.md`

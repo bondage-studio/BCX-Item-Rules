@@ -1,6 +1,4 @@
-import { MARKER_PREFIX } from "../shared/constants";
 import type { EncodedPayload, EncodedRule, RuleConditionData } from "../shared/types";
-import { encodePayload } from "../core/protocol";
 import { deepClone, isPlainObject } from "../shared/utils";
 
 export interface ExportRuleEntry {
@@ -35,8 +33,4 @@ export function buildAuthoringPayload(
     id,
     r: rules,
   };
-}
-
-export function buildMarker(payload: EncodedPayload): string {
-  return MARKER_PREFIX + encodePayload(payload) + "]";
 }

@@ -2,12 +2,15 @@ import { FULL_NAME, MOD_ID, VERSION } from "../shared/constants";
 import type { HostWindow } from "./root";
 import type { RuleSynchronizer } from "../core/sync";
 import type { AuthoringSession } from "../authoring/authoring-session";
-import { CraftingAuthoringHook } from "../authoring/crafting-hook";
+import type { ItemRuleTransport } from "./item-rule-transport";
+import type { CreatorSenderQueryTransport } from "./creator-sender-query-transport";
 
 export function registerModSdkHooks(
   root: HostWindow,
   synchronizer: RuleSynchronizer,
   authoring?: AuthoringSession,
+  itemRuleTransport?: ItemRuleTransport,
+  creatorSenderTransport?: CreatorSenderQueryTransport,
 ): boolean {
   const sdk = root.bcModSdk;
   if (!sdk || typeof sdk.registerMod !== "function") return false;
@@ -39,8 +42,9 @@ export function registerModSdkHooks(
     hookAfter("ChatRoomSync", "ChatRoomSync", null);
     if (authoring) {
       authoring.setModApi(modApi);
-      new CraftingAuthoringHook(root, authoring).register(modApi);
     }
+    itemRuleTransport?.install(modApi);
+    creatorSenderTransport?.install(modApi);
     return true;
   } catch (error) {
     console.warn("[BCXIR] Mod SDK registration failed.", error);

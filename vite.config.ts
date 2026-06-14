@@ -43,7 +43,7 @@ export default defineConfig({
         "run-at": "document-idle",
       },
       build: {
-        fileName: "BCXItemRules.user.js",
+        fileName: "BCXItemRules.script.js",
       },
     }),
   ],

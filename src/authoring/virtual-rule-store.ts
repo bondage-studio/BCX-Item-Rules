@@ -1,5 +1,6 @@
-import type { RuleConditionData } from "../shared/types";
+import type { NormalizedPayload, RuleConditionData } from "../shared/types";
 import { deepClone, isPlainObject } from "../shared/utils";
+import { makeConditionData } from "../core/conditions";
 
 const MODULE_LOG = 2;
 const MODULE_CURSES = 3;
@@ -11,8 +12,14 @@ const LIMIT_NORMAL = 0;
 export class VirtualRuleStore {
   private readonly conditions: Record<string, RuleConditionData> = {};
   private readonly limits: Record<string, number> = {};
+  private categoryRequirements: Record<string, unknown> = {};
+  private categoryTimer: number | null = null;
+  private categoryTimerRemove = false;
 
-  constructor(sourceRulesCategory?: any) {
+  constructor(
+    sourceRulesCategory?: any,
+    private readonly getDefaultCustomData?: (ruleId: string) => Record<string, unknown> | undefined,
+  ) {
     const sourceLimits = sourceRulesCategory?.limits;
     if (sourceLimits && typeof sourceLimits === "object") {
       for (const key of Object.keys(sourceLimits)) {
@@ -30,6 +37,13 @@ export class VirtualRuleStore {
       }));
   }
 
+  importPayload(payload: NormalizedPayload): void {
+    for (const rule of payload.r) {
+      this.conditions[rule.k] = makeConditionData(rule);
+      if (this.limits[rule.k] === undefined) this.limits[rule.k] = LIMIT_NORMAL;
+    }
+  }
+
   handleQuery(type: string, data: any): unknown {
     switch (type) {
       case "disabledModules":
@@ -42,6 +56,8 @@ export class VirtualRuleStore {
         return this.updateCondition(data);
       case "conditionUpdateMultiple":
         return this.updateMultiple(data);
+      case "conditionCategoryUpdate":
+        return this.updateCategory(data);
       case "ruleCreate":
         return this.createRule(data);
       case "ruleDelete":
@@ -99,10 +115,10 @@ export class VirtualRuleStore {
       return {
         access_normal: false,
         access_limited: false,
-        access_configure: false,
-        access_changeLimits: false,
-        highestRoleInRoom: ACCESS_SELF,
-        requirements: {},
+      access_configure: false,
+      access_changeLimits: false,
+      highestRoleInRoom: ACCESS_SELF,
+      requirements: {},
         timer: null,
         timerRemove: false,
         data: category === "curses" ? null : undefined,
@@ -116,9 +132,9 @@ export class VirtualRuleStore {
       access_configure: true,
       access_changeLimits: true,
       highestRoleInRoom: ACCESS_SELF,
-      requirements: {},
-      timer: null,
-      timerRemove: false,
+      requirements: deepClone(this.categoryRequirements),
+      timer: this.categoryTimer,
+      timerRemove: this.categoryTimerRemove,
       data: undefined,
       conditions: deepClone(this.conditions),
       limits: deepClone(this.limits),
@@ -128,6 +144,7 @@ export class VirtualRuleStore {
   private createRule(ruleId: unknown): boolean {
     if (typeof ruleId !== "string" || !ruleId) return false;
     if (!this.conditions[ruleId]) {
+      const customData = this.makeDefaultCustomData(ruleId);
       this.conditions[ruleId] = {
         active: true,
         favorite: false,
@@ -137,6 +154,7 @@ export class VirtualRuleStore {
         data: {
           enforce: true,
           log: true,
+          ...(customData !== undefined ? { customData } : {}),
         },
       };
     }
@@ -160,7 +178,7 @@ export class VirtualRuleStore {
 
   private updateCondition(data: any): boolean {
     if (!data || data.category !== "rules" || typeof data.condition !== "string") return false;
-    const normalized = this.normalizeCondition(data.data);
+    const normalized = this.normalizeCondition(data.condition, data.data);
     if (!normalized) return false;
     this.conditions[data.condition] = normalized;
     if (this.limits[data.condition] === undefined) this.limits[data.condition] = LIMIT_NORMAL;
@@ -185,19 +203,50 @@ export class VirtualRuleStore {
           log: true,
         },
       };
-      this.conditions[condition] = this.normalizeCondition({
+      const nextData = isPlainObject(data.data.data)
+        ? {
+          enforce: data.data.data.enforce !== undefined ? data.data.data.enforce !== false : current.data.enforce,
+          log: data.data.data.log !== undefined ? data.data.data.log !== false : current.data.log,
+          customData: data.data.data.customData !== undefined
+            ? deepClone(data.data.data.customData)
+            : current.data.customData,
+        }
+        : current.data;
+      this.conditions[condition] = this.normalizeCondition(condition, {
         ...current,
         ...data.data,
-        data: current.data,
+        data: nextData,
       }) || current;
       if (this.limits[condition] === undefined) this.limits[condition] = LIMIT_NORMAL;
     }
     return true;
   }
 
-  private normalizeCondition(value: any): RuleConditionData | null {
+  private updateCategory(data: any): boolean {
+    if (!data || data.category !== "rules" || !isPlainObject(data.data)) return false;
+    const categoryData = data.data;
+    if (categoryData.requirements !== undefined) {
+      if (categoryData.requirements == null) {
+        this.categoryRequirements = {};
+      } else if (isPlainObject(categoryData.requirements)) {
+        this.categoryRequirements = deepClone(categoryData.requirements);
+      } else {
+        return false;
+      }
+    }
+    if (categoryData.timer !== undefined) {
+      this.categoryTimer = categoryData.timer == null ? null : Number(categoryData.timer);
+    }
+    if (categoryData.timerRemove !== undefined) {
+      this.categoryTimerRemove = categoryData.timerRemove === true;
+    }
+    return true;
+  }
+
+  private normalizeCondition(ruleId: string, value: any): RuleConditionData | null {
     if (!isPlainObject(value)) return null;
     const rawData = isPlainObject(value.data) ? value.data : {};
+    const defaultCustomData = this.makeDefaultCustomData(ruleId);
     const condition: RuleConditionData = {
       active: value.active === true,
       favorite: value.favorite === true,
@@ -212,7 +261,19 @@ export class VirtualRuleStore {
     if (rawData.customData !== undefined) {
       if (!isPlainObject(rawData.customData)) return null;
       condition.data.customData = deepClone(rawData.customData);
+    } else if (defaultCustomData !== undefined) {
+      condition.data.customData = defaultCustomData;
     }
     return condition;
+  }
+
+  private makeDefaultCustomData(ruleId: string): Record<string, unknown> | undefined {
+    try {
+      const defaults = this.getDefaultCustomData?.(ruleId);
+      return defaults === undefined ? undefined : deepClone(defaults);
+    } catch (error) {
+      console.warn("[BCXIR] Failed to get default customData for " + ruleId, error);
+      return undefined;
+    }
   }
 }

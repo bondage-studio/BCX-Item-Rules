@@ -50,7 +50,26 @@ export interface DesiredRule {
   conditionData: RuleConditionData;
   priority: number;
   payloadIds: string[];
+  sources: DesiredRuleSource[];
   conflict?: boolean;
+}
+
+export type RuleOriginatorSource = "registry" | "cache" | "unknown";
+
+export interface DesiredRuleSource {
+  payloadId: string;
+  originatorMemberNumber: number | null;
+  originatorSource: RuleOriginatorSource;
+  allowMinimalCreator: boolean;
+  itemName?: string;
+}
+
+export interface PayloadWithOrigin {
+  payload: NormalizedPayload;
+  originatorMemberNumber?: number | null;
+  originatorSource?: RuleOriginatorSource;
+  allowMinimalCreator?: boolean;
+  itemName?: string;
 }
 
 export interface DesiredRulesResult {
@@ -66,6 +85,8 @@ export interface ManagedRuleState {
   createdByUs: boolean;
   payloadIds: string[];
   updatedAt: number;
+  appliedSenderMemberNumber?: number | null;
+  appliedSenderWasMinimal?: boolean;
 }
 
 export interface LocalState {
@@ -82,4 +103,37 @@ export interface BCXIRSettings {
   showInvalidPayloadMessages: boolean;
   debugLogging: boolean;
   fallbackSyncEnabled: boolean;
+  rulePermissionMode: "creator" | "self";
+  allowCachedOfflineCreator: boolean;
+  allowForeignItemRules: boolean;
+  respondToRuleRequests: boolean;
+  autoRequestForeignRules: boolean;
+  showTransportMessages: boolean;
+}
+
+export interface RegistryEntry {
+  id: string;
+  itemName: string;
+  enabled: boolean;
+  selfOnly: boolean;
+  payload: NormalizedPayload;
+  updatedAt: number;
+}
+
+export interface RegistryState {
+  v: 1;
+  entries: Record<string, RegistryEntry>;
+}
+
+export interface RuleCacheEntry {
+  cacheKey: string;
+  crafter: number;
+  itemName: string;
+  payload: NormalizedPayload;
+  updatedAt: number;
+}
+
+export interface RuleCacheState {
+  v: 1;
+  entries: Record<string, RuleCacheEntry>;
 }

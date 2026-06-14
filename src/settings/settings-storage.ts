@@ -11,6 +11,12 @@ export const DEFAULT_SETTINGS: BCXIRSettings = {
   showInvalidPayloadMessages: true,
   debugLogging: false,
   fallbackSyncEnabled: true,
+  rulePermissionMode: "creator",
+  allowCachedOfflineCreator: true,
+  allowForeignItemRules: true,
+  respondToRuleRequests: true,
+  autoRequestForeignRules: true,
+  showTransportMessages: true,
 };
 
 export interface SettingsStore {
@@ -47,6 +53,12 @@ export function normalizeSettings(value: unknown): BCXIRSettings {
     showInvalidPayloadMessages: source.showInvalidPayloadMessages !== false,
     debugLogging: source.debugLogging === true,
     fallbackSyncEnabled: source.fallbackSyncEnabled !== false,
+    rulePermissionMode: source.rulePermissionMode === "self" ? "self" : "creator",
+    allowCachedOfflineCreator: source.allowCachedOfflineCreator !== false,
+    allowForeignItemRules: source.allowForeignItemRules !== false,
+    respondToRuleRequests: source.respondToRuleRequests !== false,
+    autoRequestForeignRules: source.autoRequestForeignRules !== false,
+    showTransportMessages: source.showTransportMessages !== false,
   };
 }
 

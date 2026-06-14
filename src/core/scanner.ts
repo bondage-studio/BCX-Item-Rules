@@ -1,10 +1,17 @@
 import { makeConditionData } from "./conditions";
-import { readPayloadsFromItem } from "./protocol";
-import type { DesiredRule, DesiredRulesResult } from "../shared/types";
+import type {
+  DesiredRule,
+  DesiredRuleSource,
+  DesiredRulesResult,
+  NormalizedPayload,
+  PayloadWithOrigin,
+} from "../shared/types";
 import { sameStable } from "../shared/utils";
 
 export interface ScanOptions {
   scanItemCategoryOnly?: boolean;
+  getLocalPayloadsForItem?: (item: any) => Array<NormalizedPayload | PayloadWithOrigin>;
+  requestPayloadForItem?: (item: any) => void;
 }
 
 export function isWearerItem(item: any, options: ScanOptions = {}): boolean {
@@ -13,9 +20,7 @@ export function isWearerItem(item: any, options: ScanOptions = {}): boolean {
     item &&
     item.Asset &&
     item.Asset.Group &&
-    (!scanItemCategoryOnly || item.Asset.Group.Category === "Item") &&
-    item.Craft &&
-    typeof item.Craft.Description === "string"
+    (!scanItemCategoryOnly || item.Asset.Group.Category === "Item")
   );
 }
 
@@ -30,9 +35,10 @@ export function collectDesiredRulesFromAppearance(
 
   for (const item of Array.isArray(appearance) ? appearance : []) {
     if (!isWearerItem(item, options)) continue;
-    const parsed = readPayloadsFromItem(item);
-    errors.push(...parsed.errors);
-    for (const payload of parsed.payloads) {
+    const localPayloads = options.getLocalPayloadsForItem?.(item) || [];
+    if (!localPayloads.length) options.requestPayloadForItem?.(item);
+    for (const payloadInfo of localPayloads) {
+      const { payload, source } = normalizePayloadSource(payloadInfo);
       payloadIds.add(payload.id);
       for (const rule of payload.r) {
         const conditionData = makeConditionData(rule);
@@ -41,6 +47,7 @@ export function collectDesiredRulesFromAppearance(
           conditionData,
           priority: rule.p || 0,
           payloadIds: [payload.id],
+          sources: [source],
         };
         const existing = desired.get(rule.k);
         if (!existing) {
@@ -49,6 +56,7 @@ export function collectDesiredRulesFromAppearance(
         }
         if (sameStable(existing.conditionData, conditionData)) {
           existing.payloadIds.push(payload.id);
+          existing.sources.push(source);
           existing.priority = Math.max(existing.priority, candidate.priority);
           continue;
         }
@@ -59,6 +67,7 @@ export function collectDesiredRulesFromAppearance(
         if (candidate.priority === existing.priority) {
           existing.conflict = true;
           existing.payloadIds.push(payload.id);
+          existing.sources.push(source);
           conflicts.push("Rule " + rule.k + " has equal-priority item configs");
         }
       }
@@ -75,4 +84,31 @@ export function collectDesiredRulesFromAppearance(
     errors,
     conflicts,
   };
+}
+
+function normalizePayloadSource(value: NormalizedPayload | PayloadWithOrigin): {
+  payload: NormalizedPayload;
+  source: DesiredRuleSource;
+} {
+  const payloadInfo = isPayloadWithOrigin(value) ? value : { payload: value };
+  const payload = payloadInfo.payload;
+  return {
+    payload,
+    source: {
+      payloadId: payload.id,
+      originatorMemberNumber: normalizeMemberNumber(payloadInfo.originatorMemberNumber),
+      originatorSource: payloadInfo.originatorSource || "unknown",
+      allowMinimalCreator: payloadInfo.allowMinimalCreator === true,
+      itemName: payloadInfo.itemName,
+    },
+  };
+}
+
+function isPayloadWithOrigin(value: NormalizedPayload | PayloadWithOrigin): value is PayloadWithOrigin {
+  return !!value && typeof value === "object" && "payload" in value;
+}
+
+function normalizeMemberNumber(value: unknown): number | null {
+  const memberNumber = Number(value);
+  return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
 }

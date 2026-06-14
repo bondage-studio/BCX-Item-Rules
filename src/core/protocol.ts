@@ -1,4 +1,4 @@
-import { MARKER_PREFIX, MAX_ENCODED_LENGTH } from "../shared/constants";
+import { MAX_ENCODED_LENGTH } from "../shared/constants";
 import type { EncodedPayload, EncodedRule, NormalizedPayload, NormalizedRule } from "../shared/types";
 import { deepClone, isPlainObject } from "../shared/utils";
 
@@ -81,49 +81,6 @@ export function decodePayload(encoded: string): NormalizedPayload {
   const json = getLZString().decompressFromEncodedURIComponent(encoded.trim());
   if (!json) throw new Error("payload decompression failed");
   return normalizePayload(JSON.parse(json));
-}
-
-export function stripMarkers(description: unknown): string {
-  const source = typeof description === "string" ? description : "";
-  return source
-    .replace(/(?:\r?\n)?\[BCXIR:v1:[^\]\r\n]+\]/g, "")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\s+$/g, "");
-}
-
-export function appendPayloadToDescription(
-  description: unknown,
-  payload: EncodedPayload | NormalizedPayload,
-): string {
-  const base = stripMarkers(description);
-  const marker = MARKER_PREFIX + encodePayload(payload) + "]";
-  return base ? base + "\n" + marker : marker;
-}
-
-export function parsePayloadsFromDescription(description: unknown): {
-  payloads: NormalizedPayload[];
-  errors: string[];
-} {
-  const source = typeof description === "string" ? description : "";
-  const out: NormalizedPayload[] = [];
-  const errors: string[] = [];
-  const regex = /\[BCXIR:v1:([^\]\r\n]+)\]/g;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(source)) !== null) {
-    try {
-      out.push(decodePayload(match[1]));
-    } catch (error) {
-      errors.push(String(error instanceof Error ? error.message : error));
-    }
-  }
-  return { payloads: out, errors };
-}
-
-export function readPayloadsFromItem(item: any): {
-  payloads: NormalizedPayload[];
-  errors: string[];
-} {
-  return parsePayloadsFromDescription(item?.Craft?.Description);
 }
 
 export type { EncodedPayload, EncodedRule, NormalizedPayload, NormalizedRule };
