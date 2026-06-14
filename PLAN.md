@@ -58,7 +58,7 @@ type EncodedPayload = {
 - Cached remote item rules can keep applying when the creator is offline by temporarily inserting a minimal local creator character into `ChatRoomCharacter`; this character is not drawn, synced, or granted forced item permission.
 - `Dangerous Mode` is a separate settings page with a master switch. After that master switch is enabled, `Please use me` and `Replacement Mode` are controlled by two independent switches.
 - `Please use me` temporarily inserts a local operator character for BCX handler calls, bypassing normal self-permission blocks without directly editing `Player.ExtensionSettings.BCX`.
-- `Replacement Mode` applies only while `Please use me` is selected at runtime. Existing active rules are still skipped, but existing inactive same-rule conflicts can be saved, replaced, and restored when the item is removed.
+- `Replacement Mode` is switched independently from `Please use me`. It uses whichever Runtime permission mode is currently selected; existing active rules are still skipped, but inactive same-rule conflicts can be saved, replaced, and restored when the item is removed.
 
 ## Conflict Handling
 

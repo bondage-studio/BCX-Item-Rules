@@ -759,10 +759,10 @@
           continue;
         }
         if (!managed && current) {
-          const canSuspendInactive = applyContext.context.kind === "useMe" && settings.dangerModeEnabled === true && settings.unlockUseMeMode === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
+          const canSuspendInactive = settings.dangerModeEnabled === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
           if (!canSuspendInactive) {
             conflictMessages.push(
-              (comparableCurrent == null ? void 0 : comparableCurrent.active) === false && applyContext.context.kind === "useMe" ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId : "Existing BCX rule not overwritten: " + ruleId
+              (comparableCurrent == null ? void 0 : comparableCurrent.active) === false && settings.dangerModeEnabled === true ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId : "Existing BCX rule not overwritten: " + ruleId
             );
             continue;
           }
