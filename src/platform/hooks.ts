@@ -19,7 +19,7 @@ export function registerModSdkHooks(
       name: MOD_ID,
       fullName: FULL_NAME,
       version: VERSION,
-      repository: "https://github.com/VivianMoonlight/BCX-Item-Rules",
+      repository: "https://github.com/bondage-studio/BCX-Item-Rules",
     }, { allowReplace: true });
 
     const hookAfter = (fnName: string, reason: string, characterIndex: number | null): void => {

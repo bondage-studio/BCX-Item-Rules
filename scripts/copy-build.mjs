@@ -44,10 +44,10 @@ function makeLoader({ version, scriptUrl, lzStringUrl }) {
   const connectBlock = uniqueConnectHosts.map((host) => "// @connect      " + host).join("\n");
   return `// ==UserScript==
 // @name         BCX Item Rules Loader
-// @namespace    https://github.com/VivianMoonlight
+// @namespace    https://github.com/bondage-studio
 // @version      ${version}
 // @description  Loader for BCX Item Rules. Fetches the latest hosted script with cache busting.
-// @author       VivianMoonlight
+// @author       Bondage Studio
 // @match        https://bondageprojects.elementfx.com/*
 // @match        https://www.bondageprojects.elementfx.com/*
 // @match        https://bondage-europe.com/*

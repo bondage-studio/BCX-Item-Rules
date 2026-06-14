@@ -1,4 +1,4 @@
-# BCX Item Rules
+﻿# BCX Item Rules
 
 [中文说明](#中文说明)
 
@@ -11,13 +11,13 @@ BCXIR does not write to BCX internal storage.
 Install the loader in Tampermonkey:
 
 ```text
-https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main/BCXItemRules.loader.user.js
+https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.loader.user.js
 ```
 
 Compatibility alias:
 
 ```text
-https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main/BCXItemRules.user.js
+https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.user.js
 ```
 
 You also need BCX installed and available in game as `window.bcx`.
@@ -47,7 +47,7 @@ This keeps the installed userscript small and lets published script updates take
 - Apply rules when matching crafted items are worn.
 - Request remote item rule payloads from the item's creator using an LSCG-style private `Leash` command beep.
 - Cache received remote payloads locally.
-- Optional creator-based permission mode, including cached offline creator identity for previously trusted cache entries.
+- Optional creator-based permission mode, including cached offline creator identity for trusted cache entries.
 - Per-item `Only applies to myself` option.
 - Global option to block rules from other people's items.
 - Native Bondage Club extension settings menu.
@@ -160,7 +160,7 @@ The hosted script base URL is configured in `package.json`:
 ```json
 {
   "bcxir": {
-    "remoteBase": "https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main"
+    "remoteBase": "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main"
   }
 }
 ```
@@ -208,13 +208,13 @@ BCXIR 不会写入 BCX 的内部存档。
 在 Tampermonkey 中安装 loader：
 
 ```text
-https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main/BCXItemRules.loader.user.js
+https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.loader.user.js
 ```
 
 兼容旧链接的别名：
 
 ```text
-https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main/BCXItemRules.user.js
+https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.user.js
 ```
 
 你还需要安装 BCX，并确保游戏中存在 `window.bcx`。
@@ -357,7 +357,7 @@ http://127.0.0.1:5181
 ```json
 {
   "bcxir": {
-    "remoteBase": "https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main"
+    "remoteBase": "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main"
   }
 }
 ```

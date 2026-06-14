@@ -24,10 +24,10 @@ export default defineConfig({
       entry: "src/entry/userscript-entry.ts",
       userscript: {
         name: "BCX Item Rules",
-        namespace: "https://github.com/VivianMoonlight",
+        namespace: "https://github.com/bondage-studio",
         version: packageJson.version,
         description: "Apply BCX rules from portable crafted item metadata.",
-        author: "VivianMoonlight",
+        author: "Bondage Studio",
         match: [
           "https://bondageprojects.elementfx.com/*",
           "https://www.bondageprojects.elementfx.com/*",

@@ -30,7 +30,7 @@
 ```json
 {
   "bcxir": {
-    "remoteBase": "https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main"
+    "remoteBase": "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main"
   }
 }
 ```

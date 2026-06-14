@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BCX Item Rules
-// @namespace    https://github.com/VivianMoonlight
+// @namespace    https://github.com/bondage-studio
 // @version      0.1.0
-// @author       VivianMoonlight
+// @author       Bondage Studio
 // @description  Apply BCX rules from portable crafted item metadata.
 // @match        https://bondageprojects.elementfx.com/*
 // @match        https://www.bondageprojects.elementfx.com/*
@@ -1003,7 +1003,7 @@
         name: MOD_ID,
         fullName: FULL_NAME,
         version: VERSION,
-        repository: "https://github.com/VivianMoonlight/BCX-Item-Rules"
+        repository: "https://github.com/bondage-studio/BCX-Item-Rules"
       }, { allowReplace: true });
       const hookAfter = (fnName, reason, characterIndex) => {
         try {

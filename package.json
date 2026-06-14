@@ -12,7 +12,7 @@
     "clean": "node scripts/clean.mjs"
   },
   "bcxir": {
-    "remoteBase": "https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main"
+    "remoteBase": "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

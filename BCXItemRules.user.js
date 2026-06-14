@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         BCX Item Rules Loader
-// @namespace    https://github.com/VivianMoonlight
+// @namespace    https://github.com/bondage-studio
 // @version      0.1.0
 // @description  Loader for BCX Item Rules. Fetches the latest hosted script with cache busting.
-// @author       VivianMoonlight
+// @author       Bondage Studio
 // @match        https://bondageprojects.elementfx.com/*
 // @match        https://www.bondageprojects.elementfx.com/*
 // @match        https://bondage-europe.com/*
@@ -23,7 +23,7 @@
   "use strict";
 
   const BCXIR_LOADER_VERSION = "0.1.0";
-  const BCXIR_SCRIPT_URL = "https://raw.githubusercontent.com/VivianMoonlight/BCX-Item-Rules/main/BCXItemRules.script.js";
+  const BCXIR_SCRIPT_URL = "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.script.js";
   const BCXIR_LZ_STRING_URL = "https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js";
   const BCXIR_ROOT = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
 
