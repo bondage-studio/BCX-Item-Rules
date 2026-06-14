@@ -114,6 +114,8 @@ Player.ExtensionSettings.BCX
 - Rules managed by BCXIR are restored or deleted conservatively when items are removed.
 - The virtual authoring character is local-only and temporary.
 - Remote responses are validated against the item's creator member number.
+- `Please use me` is an advanced opt-in mode. It uses a temporary local operator to apply item rules through BCX even when normal BCX permission checks would block self changes.
+- `Please use me` still does not overwrite existing active or unmanaged rules. With the separate inactive-suspend option enabled, existing inactive same-name rules can be temporarily replaced and restored when the item rule is removed.
 
 ## Public API
 
@@ -311,6 +313,8 @@ Player.ExtensionSettings.BCX
 - 道具移除后，BCXIR 会保守恢复或删除自己管理的规则。
 - 虚拟编辑角色只存在于本地、临时会话中。
 - 远端 response 会校验是否来自道具制作者。
+- “请使用我”是高级 opt-in 模式。它会使用本地临时操作者通过 BCX 应用道具规则，即使普通 BCX 权限检查会阻止自己修改。
+- “请使用我”仍不会覆盖已有 active 或非 BCXIR 管理规则。若另外开启 inactive 挂起选项，已有同名 inactive 规则会被临时替换，并在道具规则移除后恢复。
 
 ## Public API
 

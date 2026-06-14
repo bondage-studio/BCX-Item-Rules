@@ -35,10 +35,17 @@ const ADVANCED_ACTIONS = {
   disableSharing: { col: 1, row: 4, labelKey: "diagnostics.disableSharing", tooltipKey: "diagnostics.disableSharing.tip" },
 } as const;
 
+const RIGHT_CHECKBOX_ROWS = {
+  useMeUnlock: 5,
+  suspendInactive: 6,
+} as const;
+
 const LEFT_X = 380;
 const LEFT_LABEL_W = 560;
 const LEFT_CHECKBOX_X = 965;
 const RIGHT_X = 1090;
+const RIGHT_LABEL_W = 470;
+const RIGHT_CHECKBOX_X = 1630;
 const ACTION_W = 250;
 const ACTION_GAP = 24;
 const ACTION_ROW_H = 74;
@@ -86,6 +93,10 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
     this.drawLeftCheckbox(ROWS.fallback, this.t("diagnostics.fallback"), this.t("diagnostics.fallback.tip"), settings.fallbackSyncEnabled);
     this.drawLeftCheckbox(ROWS.cachedOffline, this.t("diagnostics.cachedOffline"), this.t("diagnostics.cachedOffline.tip"), settings.allowCachedOfflineCreator);
     this.drawActionButtons();
+    this.drawRightCheckbox(RIGHT_CHECKBOX_ROWS.useMeUnlock, this.t("diagnostics.useMeUnlock"), this.t("diagnostics.useMeUnlock.tip"), settings.unlockUseMeMode);
+    if (settings.unlockUseMeMode) {
+      this.drawRightCheckbox(RIGHT_CHECKBOX_ROWS.suspendInactive, this.t("diagnostics.suspendInactive"), this.t("diagnostics.suspendInactive.tip"), settings.useMeSuspendInactiveConflicts);
+    }
     if (authoring?.status && authoring.status !== "idle") {
       this.drawActionButton(ACTIONS.report, this.t("diagnostics.cancelAuth"), this.t("diagnostics.cancelAuth.tip"));
     }
@@ -106,6 +117,26 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
     if (this.leftCheckboxClicked(ROWS.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
       this.settingsStore.update({ allowCachedOfflineCreator: !settings.allowCachedOfflineCreator });
       this.synchronizer.scheduleSync("diagnostics-cached-offline");
+    }
+    if (this.rightCheckboxClicked(RIGHT_CHECKBOX_ROWS.useMeUnlock)) {
+      if (settings.unlockUseMeMode) {
+        this.settingsStore.update({
+          unlockUseMeMode: false,
+          useMeSuspendInactiveConflicts: false,
+          rulePermissionMode: settings.rulePermissionMode === "useMe" ? "creator" : settings.rulePermissionMode,
+        });
+        this.synchronizer.scheduleSync("diagnostics-useme-lock");
+      } else if (this.confirm(this.t("diagnostics.confirm.useMeUnlock"))) {
+        this.settingsStore.update({ unlockUseMeMode: true });
+      }
+    }
+    if (
+      settings.unlockUseMeMode &&
+      this.rightCheckboxClicked(RIGHT_CHECKBOX_ROWS.suspendInactive) &&
+      (!settings.useMeSuspendInactiveConflicts || this.confirm(this.t("diagnostics.confirm.suspendInactive")))
+    ) {
+      this.settingsStore.update({ useMeSuspendInactiveConflicts: !settings.useMeSuspendInactiveConflicts });
+      this.synchronizer.scheduleSync("diagnostics-suspend-inactive");
     }
     if (this.actionClicked(ACTIONS.syncNow)) void this.synchronizer.syncNow("diagnostics");
     if (this.actionClicked(ACTIONS.retry)) {
@@ -191,6 +222,19 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
 
   private leftCheckboxClicked(row: number): boolean {
     return this.mouseIn(LEFT_CHECKBOX_X, this.rowY(row) - 32, 64, 64);
+  }
+
+  private drawRightCheckbox(row: number, label: string, description: string, value: boolean): void {
+    const y = ACTION_START_Y + row * ACTION_ROW_H + 32;
+    const hovering = this.mouseIn(RIGHT_X, y - 32, RIGHT_LABEL_W + 64, 64);
+    this.root.DrawTextFit(label, RIGHT_X, y, RIGHT_LABEL_W, hovering ? "Red" : "Black", "Gray");
+    this.root.DrawCheckbox(RIGHT_CHECKBOX_X, y - 32, 64, 64, "", value, false);
+    if (hovering) this.drawTooltip(description);
+  }
+
+  private rightCheckboxClicked(row: number): boolean {
+    const y = ACTION_START_Y + row * ACTION_ROW_H + 32;
+    return this.mouseIn(RIGHT_CHECKBOX_X, y - 32, 64, 64);
   }
 
   private copyReport(): void {

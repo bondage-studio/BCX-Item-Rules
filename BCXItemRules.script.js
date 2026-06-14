@@ -43,10 +43,11 @@
   const ITEM_RULE_REQUEST_COMMAND = "bcxir-item-rules-request";
   const ITEM_RULE_RESPONSE_COMMAND = "bcxir-item-rules-response";
   class BCXAdapter {
-    constructor(root, creatorSenderTransport) {
+    constructor(root, creatorSenderTransport, useMeTransport) {
       __publicField(this, "bcxApi", null);
       this.root = root;
       this.creatorSenderTransport = creatorSenderTransport;
+      this.useMeTransport = useMeTransport;
     }
     canUseBCX() {
       return !!(this.root.bcx && typeof this.root.bcx.getModApi === "function");
@@ -65,6 +66,10 @@
       if (context.kind === "creator") {
         if (!this.creatorSenderTransport) throw new Error("Creator sender transport is unavailable");
         return this.creatorSenderTransport.queryAsSender(type, data, context, QUERY_TIMEOUT_MS);
+      }
+      if (context.kind === "useMe") {
+        if (!this.useMeTransport) throw new Error("Please-use-me transport is unavailable");
+        return this.useMeTransport.queryUseMe(type, data, QUERY_TIMEOUT_MS);
       }
       const api = this.getApi();
       if (!api || typeof api.sendQuery !== "function") {
@@ -715,7 +720,6 @@
       this.itemRuleTransport = itemRuleTransport;
     }
     async applyDesiredRules(desiredInfo, reason) {
-      var _a;
       const api = this.bcx.getApi();
       if (!api) {
         this.reporter.reportOnce("missing-bcx", ["BCX is not available; item rules are paused"], "error");
@@ -747,6 +751,7 @@
         }
         const current = this.bcx.getRulePublicData(conditionsData, ruleId);
         const managed = state.managed[ruleId];
+        const wasManaged = !!managed;
         const comparableCurrent = normalizeConditionForUpdate(current);
         if ((managed == null ? void 0 : managed.lastApplied) && comparableCurrent && !sameStable(comparableCurrent, managed.lastApplied)) {
           delete state.managed[ruleId];
@@ -754,10 +759,25 @@
           continue;
         }
         if (!managed && current) {
-          conflictMessages.push("Existing BCX rule not overwritten: " + ruleId);
-          continue;
+          const canSuspendInactive = applyContext.context.kind === "useMe" && settings.unlockUseMeMode === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
+          if (!canSuspendInactive) {
+            conflictMessages.push(
+              (comparableCurrent == null ? void 0 : comparableCurrent.active) === false && applyContext.context.kind === "useMe" ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId : "Existing BCX rule not overwritten: " + ruleId
+            );
+            continue;
+          }
+          state.managed[ruleId] = {
+            previousCondition: deepClone(comparableCurrent),
+            createdByUs: false,
+            payloadIds: [],
+            updatedAt: now(),
+            appliedSenderMemberNumber: applyContext.senderMemberNumber,
+            appliedSenderWasMinimal: applyContext.allowMinimalCreator,
+            appliedContextKind: applyContext.context.kind,
+            suspendedExistingInactive: true
+          };
         }
-        if (!managed) {
+        if (!state.managed[ruleId]) {
           const okCreate = await this.bcx.ensureRuleExists(ruleId, conditionsData, applyContext.context);
           if (!okCreate) {
             conflictMessages.push("BCX refused to create rule: " + ruleId);
@@ -771,14 +791,19 @@
             payloadIds: [],
             updatedAt: now(),
             appliedSenderMemberNumber: applyContext.senderMemberNumber,
-            appliedSenderWasMinimal: applyContext.allowMinimalCreator
+            appliedSenderWasMinimal: applyContext.allowMinimalCreator,
+            appliedContextKind: applyContext.context.kind
           };
         }
         const currentForUpdate = this.bcx.getRulePublicData(conditionsData, ruleId);
         const updateData = makeRuleUpdateData(desired.conditionData, currentForUpdate);
         const okUpdate = await this.bcx.updateRule(ruleId, updateData, applyContext.context);
         if (okUpdate !== true) {
-          if (!managed && ((_a = state.managed[ruleId]) == null ? void 0 : _a.createdByUs)) {
+          const createdState = state.managed[ruleId];
+          if (!wasManaged && (createdState == null ? void 0 : createdState.previousCondition)) {
+            await this.bcx.updateRule(ruleId, createdState.previousCondition, applyContext.context).catch(() => false);
+            delete state.managed[ruleId];
+          } else if (!wasManaged && (createdState == null ? void 0 : createdState.createdByUs)) {
             await this.bcx.deleteRule(ruleId, applyContext.context).catch(() => false);
             delete state.managed[ruleId];
           }
@@ -790,6 +815,7 @@
         state.managed[ruleId].updatedAt = now();
         state.managed[ruleId].appliedSenderMemberNumber = applyContext.senderMemberNumber;
         state.managed[ruleId].appliedSenderWasMinimal = applyContext.allowMinimalCreator;
+        state.managed[ruleId].appliedContextKind = applyContext.context.kind;
         changedMessages.push("Applied " + ruleId);
       }
       latestConditionsData = await this.bcx.fetchRuleConditions().catch(() => latestConditionsData);
@@ -951,6 +977,9 @@
     }
     getDesiredRuleContext(desired, settings) {
       const playerNumber = this.getPlayerMemberNumber();
+      if (settings.rulePermissionMode === "useMe" && settings.unlockUseMeMode === true) {
+        return { context: { kind: "useMe" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
+      }
       if (settings.rulePermissionMode === "self") {
         return { context: { kind: "self" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
       }
@@ -975,6 +1004,9 @@
     }
     getManagedRuleContext(managed) {
       const playerNumber = this.getPlayerMemberNumber();
+      if (managed.appliedContextKind === "useMe") {
+        return { context: { kind: "useMe" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
+      }
       const sender = Number(managed.appliedSenderMemberNumber);
       if (!Number.isFinite(sender) || sender <= 0 || sender === playerNumber) {
         return { context: { kind: "self" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
@@ -995,7 +1027,7 @@
       return String(error instanceof Error ? error.message : error);
     }
   }
-  function registerModSdkHooks(root, synchronizer, authoring, itemRuleTransport, creatorSenderTransport) {
+  function registerModSdkHooks(root, synchronizer, authoring, itemRuleTransport, creatorSenderTransport, useMeTransport) {
     const sdk = root.bcModSdk;
     if (!sdk || typeof sdk.registerMod !== "function") return false;
     try {
@@ -1027,6 +1059,7 @@
       }
       itemRuleTransport == null ? void 0 : itemRuleTransport.install(modApi);
       creatorSenderTransport == null ? void 0 : creatorSenderTransport.install(modApi);
+      useMeTransport == null ? void 0 : useMeTransport.install(modApi);
       return true;
     } catch (error) {
       console.warn("[BCXIR] Mod SDK registration failed.", error);
@@ -1043,6 +1076,8 @@
     fallbackSyncEnabled: true,
     rulePermissionMode: "creator",
     allowCachedOfflineCreator: true,
+    unlockUseMeMode: false,
+    useMeSuspendInactiveConflicts: false,
     allowForeignItemRules: true,
     respondToRuleRequests: true,
     autoRequestForeignRules: true,
@@ -1062,6 +1097,8 @@
   }
   function normalizeSettings(value) {
     const source = isPlainObject(value) ? value : {};
+    const unlockUseMeMode = source.unlockUseMeMode === true;
+    const rulePermissionMode = source.rulePermissionMode === "self" ? "self" : source.rulePermissionMode === "useMe" && unlockUseMeMode ? "useMe" : "creator";
     return {
       v: 1,
       enabled: source.enabled !== false,
@@ -1070,8 +1107,10 @@
       showInvalidPayloadMessages: source.showInvalidPayloadMessages !== false,
       debugLogging: source.debugLogging === true,
       fallbackSyncEnabled: source.fallbackSyncEnabled !== false,
-      rulePermissionMode: source.rulePermissionMode === "self" ? "self" : "creator",
+      rulePermissionMode,
       allowCachedOfflineCreator: source.allowCachedOfflineCreator !== false,
+      unlockUseMeMode,
+      useMeSuspendInactiveConflicts: unlockUseMeMode && source.useMeSuspendInactiveConflicts === true,
       allowForeignItemRules: source.allowForeignItemRules !== false,
       respondToRuleRequests: source.respondToRuleRequests !== false,
       autoRequestForeignRules: source.autoRequestForeignRules !== false,
@@ -1186,9 +1225,10 @@
     "item.defaultName": "BCXIR Item No. {index}",
     "runtime.title": "BCXIR Runtime / Sharing / Backup",
     "runtime.permissionMode": "Permission mode:",
-    "runtime.permissionMode.tip": "Choose whether BCXIR applies rules as the item creator or as yourself.",
+    "runtime.permissionMode.tip": "Choose who BCXIR uses when applying item rules. The advanced Please use me mode must be unlocked first.",
     "runtime.permission.creator": "Item creator",
     "runtime.permission.self": "Myself",
+    "runtime.permission.useMe": "Please use me",
     "runtime.foreign": "Allow rules from other people's items",
     "runtime.foreign.tip": "When disabled, remote cache and remote requests are ignored.",
     "runtime.respond": "Respond to rule requests",
@@ -1229,6 +1269,10 @@
     "diagnostics.fallback.tip": "Run a low-frequency safety scan in addition to hook-triggered syncs.",
     "diagnostics.cachedOffline": "Allow cached offline creator",
     "diagnostics.cachedOffline.tip": "Use trusted cache to create a minimal local creator identity for BCX checks.",
+    "diagnostics.useMeUnlock": 'Unlock "Please use me"',
+    "diagnostics.useMeUnlock.tip": "Advanced risky mode: lets BCXIR apply item rules to you through a local operator even when normal BCX permission checks would block it.",
+    "diagnostics.suspendInactive": "Suspend inactive conflicts",
+    "diagnostics.suspendInactive.tip": "Only in Please use me mode: if an existing same-name rule is inactive, temporarily replace it and restore it when the item rule is removed.",
     "diagnostics.syncNow": "Sync Now",
     "diagnostics.syncNow.tip": "Run a BCXIR sync immediately.",
     "diagnostics.retry": "Retry Requests",
@@ -1246,6 +1290,8 @@
     "diagnostics.disableSharing": "Disable Sharing",
     "diagnostics.disableSharing.tip": "Disable responding to and requesting remote item rules.",
     "diagnostics.confirm.cachedOffline": "Change cached offline creator behavior?",
+    "diagnostics.confirm.useMeUnlock": "Unlock Please use me mode? This is advanced and risky. BCXIR may apply item rules to you through a local operator even when normal BCX permission checks would block them. Existing active or unmanaged rules will still not be overwritten.",
+    "diagnostics.confirm.suspendInactive": "Allow BCXIR to temporarily replace existing inactive same-name rules in Please use me mode? Active rules will still not be overwritten.",
     "diagnostics.confirm.reset": "Reset BCXIR settings?",
     "diagnostics.confirm.deleteRules": "Delete all registered item rules?",
     "diagnostics.confirm.disableCleanup": "Disable BCXIR and release managed rules?",
@@ -1294,9 +1340,10 @@
     "item.defaultName": "BCXIR 道具 {index}",
     "runtime.title": "BCXIR 运行 / 分享 / 备份",
     "runtime.permissionMode": "权限模式：",
-    "runtime.permissionMode.tip": "选择 BCXIR 以道具制作者还是以自己身份应用规则。",
+    "runtime.permissionMode.tip": "选择 BCXIR 应用道具规则时使用的身份。高级“请使用我”模式需要先解锁。",
     "runtime.permission.creator": "道具制作者",
     "runtime.permission.self": "自己",
+    "runtime.permission.useMe": "请使用我",
     "runtime.foreign": "允许他人的道具规则影响自己",
     "runtime.foreign.tip": "关闭后，将忽略远端缓存和远端规则请求。",
     "runtime.respond": "响应规则请求",
@@ -1337,6 +1384,10 @@
     "diagnostics.fallback.tip": "除 hook 触发同步外，低频运行安全扫描。",
     "diagnostics.cachedOffline": "允许缓存的离线制作者",
     "diagnostics.cachedOffline.tip": "使用可信缓存创建最小本地制作者身份，以便 BCX 权限检查。",
+    "diagnostics.useMeUnlock": "解锁“请使用我”",
+    "diagnostics.useMeUnlock.tip": "高级风险模式：允许 BCXIR 通过本地临时操作者把道具规则应用到你身上，即使普通 BCX 权限检查会阻止。",
+    "diagnostics.suspendInactive": "挂起 inactive 冲突",
+    "diagnostics.suspendInactive.tip": "仅在“请使用我”模式中生效：如果同名现有规则处于 inactive，则临时替换它，并在道具规则移除时恢复。",
     "diagnostics.syncNow": "立即同步",
     "diagnostics.syncNow.tip": "立刻运行一次 BCXIR 同步。",
     "diagnostics.retry": "重试请求",
@@ -1354,6 +1405,8 @@
     "diagnostics.disableSharing": "禁用分享",
     "diagnostics.disableSharing.tip": "禁止响应和请求远端道具规则。",
     "diagnostics.confirm.cachedOffline": "更改缓存离线制作者行为？",
+    "diagnostics.confirm.useMeUnlock": "解锁“请使用我”模式？这是高级风险功能。BCXIR 可能通过本地临时操作者把道具规则应用到你身上，即使普通 BCX 权限检查会阻止。已有 active 或非 BCXIR 管理规则仍不会被覆盖。",
+    "diagnostics.confirm.suspendInactive": "允许 BCXIR 在“请使用我”模式中临时替换同名 inactive 规则？Active 规则仍不会被覆盖。",
     "diagnostics.confirm.reset": "重置 BCXIR 设置？",
     "diagnostics.confirm.deleteRules": "删除所有已注册道具规则？",
     "diagnostics.confirm.disableCleanup": "禁用 BCXIR 并释放已管理规则？",
@@ -1803,7 +1856,7 @@
         ROWS$1.permissionMode,
         this.t("runtime.permissionMode"),
         this.t("runtime.permissionMode.tip"),
-        settings.rulePermissionMode === "creator" ? this.t("runtime.permission.creator") : this.t("runtime.permission.self")
+        this.permissionModeLabel(settings.rulePermissionMode)
       );
       this.drawCheckbox(ROWS$1.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
       this.drawCheckbox(ROWS$1.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
@@ -1826,7 +1879,7 @@
       const cacheEntries = listRuleCacheEntries(this.root);
       const currentCache = cacheEntries[this.cacheIndex] || null;
       if (this.selectorClicked(ROWS$1.permissionMode)) {
-        this.update({ rulePermissionMode: settings.rulePermissionMode === "creator" ? "self" : "creator" });
+        this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.unlockUseMeMode) });
       }
       if (this.checkboxClicked(ROWS$1.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
       if (this.checkboxClicked(ROWS$1.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
@@ -1854,6 +1907,15 @@
       this.settingsStore.update(patch);
       this.synchronizer.startFallbackTimer();
       this.synchronizer.scheduleSync("settings");
+    }
+    permissionModeLabel(mode) {
+      if (mode === "useMe") return this.t("runtime.permission.useMe");
+      return mode === "creator" ? this.t("runtime.permission.creator") : this.t("runtime.permission.self");
+    }
+    nextPermissionMode(mode, unlockUseMeMode) {
+      const modes = unlockUseMeMode ? ["creator", "self", "useMe"] : ["creator", "self"];
+      const index = modes.indexOf(mode);
+      return modes[(index + 1) % modes.length];
     }
     drawCacheActions(hasCurrentCache) {
       const y = this.rowY(ROWS$1.cacheActions) - 32;
@@ -1935,10 +1997,16 @@
     disableCleanup: { col: 0, row: 4, labelKey: "diagnostics.disableCleanup", tooltipKey: "diagnostics.disableCleanup.tip" },
     disableSharing: { col: 1, row: 4, labelKey: "diagnostics.disableSharing", tooltipKey: "diagnostics.disableSharing.tip" }
   };
+  const RIGHT_CHECKBOX_ROWS = {
+    useMeUnlock: 5,
+    suspendInactive: 6
+  };
   const LEFT_X = 380;
   const LEFT_LABEL_W = 560;
   const LEFT_CHECKBOX_X = 965;
   const RIGHT_X = 1090;
+  const RIGHT_LABEL_W = 470;
+  const RIGHT_CHECKBOX_X = 1630;
   const ACTION_W = 250;
   const ACTION_GAP = 24;
   const ACTION_ROW_H = 74;
@@ -1982,6 +2050,10 @@
       this.drawLeftCheckbox(ROWS.fallback, this.t("diagnostics.fallback"), this.t("diagnostics.fallback.tip"), settings.fallbackSyncEnabled);
       this.drawLeftCheckbox(ROWS.cachedOffline, this.t("diagnostics.cachedOffline"), this.t("diagnostics.cachedOffline.tip"), settings.allowCachedOfflineCreator);
       this.drawActionButtons();
+      this.drawRightCheckbox(RIGHT_CHECKBOX_ROWS.useMeUnlock, this.t("diagnostics.useMeUnlock"), this.t("diagnostics.useMeUnlock.tip"), settings.unlockUseMeMode);
+      if (settings.unlockUseMeMode) {
+        this.drawRightCheckbox(RIGHT_CHECKBOX_ROWS.suspendInactive, this.t("diagnostics.suspendInactive"), this.t("diagnostics.suspendInactive.tip"), settings.useMeSuspendInactiveConflicts);
+      }
       if ((authoring == null ? void 0 : authoring.status) && authoring.status !== "idle") {
         this.drawActionButton(ACTIONS.report, this.t("diagnostics.cancelAuth"), this.t("diagnostics.cancelAuth.tip"));
       }
@@ -2002,6 +2074,22 @@
       if (this.leftCheckboxClicked(ROWS.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
         this.settingsStore.update({ allowCachedOfflineCreator: !settings.allowCachedOfflineCreator });
         this.synchronizer.scheduleSync("diagnostics-cached-offline");
+      }
+      if (this.rightCheckboxClicked(RIGHT_CHECKBOX_ROWS.useMeUnlock)) {
+        if (settings.unlockUseMeMode) {
+          this.settingsStore.update({
+            unlockUseMeMode: false,
+            useMeSuspendInactiveConflicts: false,
+            rulePermissionMode: settings.rulePermissionMode === "useMe" ? "creator" : settings.rulePermissionMode
+          });
+          this.synchronizer.scheduleSync("diagnostics-useme-lock");
+        } else if (this.confirm(this.t("diagnostics.confirm.useMeUnlock"))) {
+          this.settingsStore.update({ unlockUseMeMode: true });
+        }
+      }
+      if (settings.unlockUseMeMode && this.rightCheckboxClicked(RIGHT_CHECKBOX_ROWS.suspendInactive) && (!settings.useMeSuspendInactiveConflicts || this.confirm(this.t("diagnostics.confirm.suspendInactive")))) {
+        this.settingsStore.update({ useMeSuspendInactiveConflicts: !settings.useMeSuspendInactiveConflicts });
+        this.synchronizer.scheduleSync("diagnostics-suspend-inactive");
       }
       if (this.actionClicked(ACTIONS.syncNow)) void this.synchronizer.syncNow("diagnostics");
       if (this.actionClicked(ACTIONS.retry)) {
@@ -2078,6 +2166,17 @@
     }
     leftCheckboxClicked(row) {
       return this.mouseIn(LEFT_CHECKBOX_X, this.rowY(row) - 32, 64, 64);
+    }
+    drawRightCheckbox(row, label, description, value) {
+      const y = ACTION_START_Y + row * ACTION_ROW_H + 32;
+      const hovering = this.mouseIn(RIGHT_X, y - 32, RIGHT_LABEL_W + 64, 64);
+      this.root.DrawTextFit(label, RIGHT_X, y, RIGHT_LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.root.DrawCheckbox(RIGHT_CHECKBOX_X, y - 32, 64, 64, "", value, false);
+      if (hovering) this.drawTooltip(description);
+    }
+    rightCheckboxClicked(row) {
+      const y = ACTION_START_Y + row * ACTION_ROW_H + 32;
+      return this.mouseIn(RIGHT_CHECKBOX_X, y - 32, 64, 64);
     }
     copyReport() {
       var _a, _b, _c;
@@ -3753,12 +3852,215 @@
       ].join(":");
     }
   }
+  const USE_ME_OPERATOR_MEMBER_NUMBER = 990001339;
+  class UseMeQueryTransport {
+    constructor(root) {
+      __publicField(this, "installed", false);
+      __publicField(this, "sequence", 0);
+      __publicField(this, "pending", /* @__PURE__ */ new Map());
+      __publicField(this, "operator", null);
+      this.root = root;
+    }
+    install(modApi) {
+      if (this.installed) return true;
+      if (!modApi || typeof modApi.hookFunction !== "function") return false;
+      try {
+        modApi.hookFunction("ServerSend", 19, (args, next) => {
+          if (this.handleServerSend(args)) return void 0;
+          return next(args);
+        });
+        this.installed = true;
+        return true;
+      } catch (error) {
+        console.warn("[BCXIR] Failed to install useMe query transport.", error);
+        return false;
+      }
+    }
+    queryUseMe(type, data, timeoutMs = QUERY_TIMEOUT_MS) {
+      if (typeof this.root.ChatRoomMessage !== "function") {
+        return Promise.reject(new Error("BC ChatRoomMessage is unavailable"));
+      }
+      const release = this.acquireOperator();
+      if (!release) return Promise.reject(new Error("BCXIR useMe operator is unavailable"));
+      const sender = this.getOperatorMemberNumber();
+      const id = this.makeQueryId(type);
+      return new Promise((resolve, reject) => {
+        const cleanup = () => {
+          this.pending.delete(id);
+          release();
+        };
+        const timeout = this.root.setTimeout(() => {
+          cleanup();
+          reject(new Error("Timed out"));
+        }, timeoutMs);
+        this.pending.set(id, {
+          sender,
+          resolve: (value) => {
+            this.root.clearTimeout(timeout);
+            cleanup();
+            resolve(value);
+          },
+          reject: (error) => {
+            this.root.clearTimeout(timeout);
+            cleanup();
+            reject(error);
+          },
+          timeout,
+          release
+        });
+        try {
+          this.root.ChatRoomMessage({
+            Type: "Hidden",
+            Content: "BCXMsg",
+            Sender: sender,
+            Dictionary: {
+              type: "query",
+              message: {
+                id,
+                query: type,
+                data
+              }
+            }
+          });
+        } catch (error) {
+          const pending = this.pending.get(id);
+          if (pending) {
+            this.root.clearTimeout(pending.timeout);
+            this.pending.delete(id);
+            pending.release();
+          }
+          reject(error);
+        }
+      });
+    }
+    handleServerSend(args) {
+      var _a, _b;
+      const messageType = args[0];
+      const payload = args[1];
+      if (messageType !== "ChatRoomChat" || (payload == null ? void 0 : payload.Content) !== "BCXMsg" || (payload == null ? void 0 : payload.Type) !== "Hidden") {
+        return false;
+      }
+      if (((_a = payload.Dictionary) == null ? void 0 : _a.type) !== "queryAnswer") return false;
+      const message = (_b = payload.Dictionary) == null ? void 0 : _b.message;
+      const id = typeof (message == null ? void 0 : message.id) === "string" ? message.id : "";
+      const pending = this.pending.get(id);
+      if (!pending) return false;
+      if (Number(payload.Target) !== pending.sender) return false;
+      if (message.ok === true) pending.resolve(message.data);
+      else pending.reject(message.data || new Error("BCX query rejected"));
+      return true;
+    }
+    acquireOperator() {
+      if (this.operator) {
+        this.operator.refs += 1;
+        return () => {
+          var _a;
+          return this.releaseOperator((_a = this.operator) == null ? void 0 : _a.character);
+        };
+      }
+      const character = this.createOperatorCharacter();
+      if (!Array.isArray(this.root.ChatRoomCharacter)) this.root.ChatRoomCharacter = [];
+      this.root.ChatRoomCharacter.push(character);
+      this.operator = {
+        character,
+        refs: 1,
+        restore: this.patchTemporaryAuthority(character.MemberNumber)
+      };
+      return () => this.releaseOperator(character);
+    }
+    releaseOperator(character) {
+      var _a;
+      const entry = this.operator;
+      if (!entry || entry.character !== character) return;
+      entry.refs -= 1;
+      if (entry.refs > 0) return;
+      this.operator = null;
+      (_a = entry.restore) == null ? void 0 : _a.call(entry);
+      this.removeFromArray("ChatRoomCharacter", character);
+    }
+    patchTemporaryAuthority(memberNumber) {
+      const root = this.root;
+      const player = root.Player || {};
+      const previousAllowItem = root.ServerChatRoomGetAllowItem;
+      const previousIsOwnedByMemberNumber = player.IsOwnedByMemberNumber;
+      const hadWhiteList = Array.isArray(player.WhiteList);
+      const previousWhiteList = hadWhiteList ? player.WhiteList.slice() : null;
+      let patchedAllowItem = null;
+      let patchedIsOwnedByMemberNumber = null;
+      if (!Array.isArray(player.WhiteList)) player.WhiteList = [];
+      if (!player.WhiteList.includes(memberNumber)) player.WhiteList.push(memberNumber);
+      if (typeof previousAllowItem === "function") {
+        patchedAllowItem = function patchedServerChatRoomGetAllowItem(source, target) {
+          if ((source == null ? void 0 : source.MemberNumber) === memberNumber && target === root.Player) return true;
+          return previousAllowItem.apply(this, arguments);
+        };
+        root.ServerChatRoomGetAllowItem = patchedAllowItem;
+      }
+      if (typeof previousIsOwnedByMemberNumber === "function") {
+        patchedIsOwnedByMemberNumber = function patchedPlayerIsOwnedByMemberNumber(value) {
+          if (Number(value) === memberNumber) return true;
+          return previousIsOwnedByMemberNumber.apply(this, arguments);
+        };
+        player.IsOwnedByMemberNumber = patchedIsOwnedByMemberNumber;
+      }
+      return () => {
+        if (patchedAllowItem && root.ServerChatRoomGetAllowItem === patchedAllowItem) root.ServerChatRoomGetAllowItem = previousAllowItem;
+        if (patchedIsOwnedByMemberNumber && player.IsOwnedByMemberNumber === patchedIsOwnedByMemberNumber) player.IsOwnedByMemberNumber = previousIsOwnedByMemberNumber;
+        if (previousWhiteList) player.WhiteList = previousWhiteList;
+        else if (!hadWhiteList) delete player.WhiteList;
+      };
+    }
+    getOperatorMemberNumber() {
+      var _a;
+      const playerNumber = Number((_a = this.root.Player) == null ? void 0 : _a.MemberNumber);
+      if (Number.isFinite(playerNumber) && playerNumber === USE_ME_OPERATOR_MEMBER_NUMBER) {
+        return USE_ME_OPERATOR_MEMBER_NUMBER + 1;
+      }
+      return USE_ME_OPERATOR_MEMBER_NUMBER;
+    }
+    createOperatorCharacter() {
+      const player = this.root.Player || {};
+      const memberNumber = this.getOperatorMemberNumber();
+      return {
+        ID: 0,
+        Name: "BCXIR Please Use Me",
+        Nickname: "BCXIR Please Use Me",
+        AccountName: "BCXIR_UseMe",
+        MemberNumber: memberNumber,
+        AssetFamily: player.AssetFamily || "Female3DCG",
+        Appearance: [],
+        ActivePose: [],
+        Effect: [],
+        OnlineSharedSettings: {},
+        ItemPermission: 3,
+        IsPlayer: () => false
+      };
+    }
+    removeFromArray(name, value) {
+      const array = this.root[name];
+      if (!Array.isArray(array)) return;
+      const index = array.indexOf(value);
+      if (index >= 0) array.splice(index, 1);
+    }
+    makeQueryId(type) {
+      var _a;
+      this.sequence = (this.sequence + 1) % 1e6;
+      return [
+        "bcxir-useme",
+        String(((_a = this.root.Player) == null ? void 0 : _a.MemberNumber) || 0),
+        type.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40),
+        String(Date.now()),
+        String(this.sequence)
+      ].join(":");
+    }
+  }
   function bootstrap() {
     const root = getRoot();
     const settingsStore = new ExtensionSettingsStore(root);
     const reporter = new Reporter(root, settingsStore);
     const creatorSenderTransport = new CreatorSenderQueryTransport(root);
-    const bcx = new BCXAdapter(root, creatorSenderTransport);
+    const useMeTransport = new UseMeQueryTransport(root);
+    const bcx = new BCXAdapter(root, creatorSenderTransport, useMeTransport);
     const itemRuleTransport = new ItemRuleTransport(root, reporter, settingsStore);
     const synchronizer = new RuleSynchronizer(root, bcx, reporter, settingsStore, itemRuleTransport);
     itemRuleTransport.setRulesReceivedCallback(() => synchronizer.scheduleSync("item-rule-response"));
@@ -3774,7 +4076,7 @@
         settingsInitialized = true;
       }
       if (root.Player && root.bcx && bcx.canUseBCX()) {
-        registerModSdkHooks(root, synchronizer, authoring, itemRuleTransport, creatorSenderTransport);
+        registerModSdkHooks(root, synchronizer, authoring, itemRuleTransport, creatorSenderTransport, useMeTransport);
         synchronizer.startFallbackTimer();
         synchronizer.scheduleSync("startup");
         console.info("[BCXIR] Loaded.");

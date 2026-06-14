@@ -87,6 +87,8 @@ export interface ManagedRuleState {
   updatedAt: number;
   appliedSenderMemberNumber?: number | null;
   appliedSenderWasMinimal?: boolean;
+  appliedContextKind?: "self" | "creator" | "useMe";
+  suspendedExistingInactive?: boolean;
 }
 
 export interface LocalState {
@@ -103,8 +105,10 @@ export interface BCXIRSettings {
   showInvalidPayloadMessages: boolean;
   debugLogging: boolean;
   fallbackSyncEnabled: boolean;
-  rulePermissionMode: "creator" | "self";
+  rulePermissionMode: "creator" | "self" | "useMe";
   allowCachedOfflineCreator: boolean;
+  unlockUseMeMode: boolean;
+  useMeSuspendInactiveConflicts: boolean;
   allowForeignItemRules: boolean;
   respondToRuleRequests: boolean;
   autoRequestForeignRules: boolean;

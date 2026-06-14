@@ -1,10 +1,12 @@
 import { MOD_ID, QUERY_TIMEOUT_MS } from "../shared/constants";
 import type { HostWindow } from "./root";
 import type { CreatorSenderContext, CreatorSenderQueryTransport } from "./creator-sender-query-transport";
+import type { UseMeQueryTransport } from "./use-me-query-transport";
 
 export type RuleQueryContext =
   | { kind: "self" }
-  | ({ kind: "creator" } & CreatorSenderContext);
+  | ({ kind: "creator" } & CreatorSenderContext)
+  | { kind: "useMe" };
 
 export class BCXAdapter {
   private bcxApi: any = null;
@@ -12,6 +14,7 @@ export class BCXAdapter {
   constructor(
     private readonly root: HostWindow,
     private readonly creatorSenderTransport?: CreatorSenderQueryTransport,
+    private readonly useMeTransport?: UseMeQueryTransport,
   ) {}
 
   canUseBCX(): boolean {
@@ -33,6 +36,10 @@ export class BCXAdapter {
     if (context.kind === "creator") {
       if (!this.creatorSenderTransport) throw new Error("Creator sender transport is unavailable");
       return this.creatorSenderTransport.queryAsSender(type, data, context, QUERY_TIMEOUT_MS);
+    }
+    if (context.kind === "useMe") {
+      if (!this.useMeTransport) throw new Error("Please-use-me transport is unavailable");
+      return this.useMeTransport.queryUseMe(type, data, QUERY_TIMEOUT_MS);
     }
     const api = this.getApi();
     if (!api || typeof api.sendQuery !== "function") {
