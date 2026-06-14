@@ -9,13 +9,15 @@ import { SettingsRegistry } from "../settings/settings-registry";
 import { AuthoringSession } from "../authoring/authoring-session";
 import { ItemRuleTransport } from "../platform/item-rule-transport";
 import { CreatorSenderQueryTransport } from "../platform/creator-sender-query-transport";
+import { UseMeQueryTransport } from "../platform/use-me-query-transport";
 
 export function bootstrap(): void {
   const root = getRoot();
   const settingsStore = new ExtensionSettingsStore(root);
   const reporter = new Reporter(root, settingsStore);
   const creatorSenderTransport = new CreatorSenderQueryTransport(root);
-  const bcx = new BCXAdapter(root, creatorSenderTransport);
+  const useMeTransport = new UseMeQueryTransport(root);
+  const bcx = new BCXAdapter(root, creatorSenderTransport, useMeTransport);
   const itemRuleTransport = new ItemRuleTransport(root, reporter, settingsStore);
   const synchronizer = new RuleSynchronizer(root, bcx, reporter, settingsStore, itemRuleTransport);
   itemRuleTransport.setRulesReceivedCallback(() => synchronizer.scheduleSync("item-rule-response"));
@@ -33,7 +35,7 @@ export function bootstrap(): void {
       settingsInitialized = true;
     }
     if (root.Player && root.bcx && bcx.canUseBCX()) {
-      registerModSdkHooks(root, synchronizer, authoring, itemRuleTransport, creatorSenderTransport);
+      registerModSdkHooks(root, synchronizer, authoring, itemRuleTransport, creatorSenderTransport, useMeTransport);
       synchronizer.startFallbackTimer();
       synchronizer.scheduleSync("startup");
       console.info("[BCXIR] Loaded.");

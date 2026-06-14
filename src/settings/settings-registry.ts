@@ -5,13 +5,14 @@ import { SettingsMainScreen } from "./screens/settings-main";
 import { SettingsItemRulesScreen } from "./screens/settings-item-rules";
 import { SettingsRuntimeScreen } from "./screens/settings-runtime";
 import { SettingsDiagnosticsScreen } from "./screens/settings-diagnostics";
+import { SettingsDangerScreen } from "./screens/settings-danger";
 import type { SettingsScreen } from "./screens/settings-screen";
 import type { RuleSynchronizer } from "../core/sync";
 import type { AuthoringSession } from "../authoring/authoring-session";
 import type { ItemRuleTransport } from "../platform/item-rule-transport";
 import { t } from "../shared/i18n";
 
-export type SettingsScreenName = "main" | "itemRules" | "runtime" | "diagnostics";
+export type SettingsScreenName = "main" | "itemRules" | "runtime" | "diagnostics" | "danger";
 export interface SettingsScreenOptions {
   itemName?: string | null;
 }
@@ -101,6 +102,8 @@ export class SettingsRegistry {
       this.current = new SettingsRuntimeScreen(this, this.settingsStore, this.synchronizer);
     } else if (screenName === "diagnostics") {
       this.current = new SettingsDiagnosticsScreen(this, this.settingsStore, this.bcx, this.synchronizer, this.authoring, this.itemRuleTransport);
+    } else if (screenName === "danger") {
+      this.current = new SettingsDangerScreen(this, this.settingsStore, this.synchronizer);
     } else {
       this.current = new SettingsMainScreen(
         this,

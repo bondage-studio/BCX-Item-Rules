@@ -38,6 +38,10 @@ const informationSheetClicks = [];
 const preferenceActions = [];
 let currentTime = 1000000;
 let virtualReady = false;
+const bcxRuleConditions = {};
+function clone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
 const RealDate = Date;
 class FakeDate extends RealDate {
   constructor(...args) {
@@ -120,8 +124,29 @@ const context = {
       },
       getModApi() {
         return {
-          sendQuery(type) {
-            if (type === "conditionsGet") return Promise.resolve({ conditions: {} });
+          sendQuery(type, data) {
+            if (type === "conditionsGet") return Promise.resolve({ conditions: clone(bcxRuleConditions) });
+            if (type === "ruleCreate") {
+              if (!bcxRuleConditions[data]) {
+                bcxRuleConditions[data] = {
+                  active: true,
+                  favorite: false,
+                  timer: null,
+                  timerRemove: false,
+                  requirements: null,
+                  data: { enforce: true, log: true },
+                };
+              }
+              return Promise.resolve(true);
+            }
+            if (type === "conditionUpdate") {
+              bcxRuleConditions[data.condition] = clone(data.data);
+              return Promise.resolve(true);
+            }
+            if (type === "ruleDelete") {
+              delete bcxRuleConditions[data];
+              return Promise.resolve(true);
+            }
             return Promise.resolve(true);
           },
           getRuleState() { return true; },
@@ -142,7 +167,25 @@ const context = {
       const message = data.Dictionary.message;
       const ok = !!character;
       const query = message?.query;
-      const responseData = query === "conditionsGet" ? { conditions: {} } : true;
+      let responseData = true;
+      if (query === "conditionsGet") {
+        responseData = { conditions: clone(bcxRuleConditions) };
+      } else if (query === "ruleCreate") {
+        if (!bcxRuleConditions[message.data]) {
+          bcxRuleConditions[message.data] = {
+            active: true,
+            favorite: false,
+            timer: null,
+            timerRemove: false,
+            requirements: null,
+            data: { enforce: true, log: true },
+          };
+        }
+      } else if (query === "conditionUpdate") {
+        bcxRuleConditions[message.data.condition] = clone(message.data.data);
+      } else if (query === "ruleDelete") {
+        delete bcxRuleConditions[message.data];
+      }
       this.ServerSend("ChatRoomChat", {
         Content: "BCXMsg",
         Type: "Hidden",
@@ -527,6 +570,78 @@ api.updateSettings({ allowForeignItemRules: true });
 assert.equal(api.getSettings().respondToRuleRequests, true);
 assert.equal(api.getSettings().autoRequestForeignRules, true);
 assert.equal(api.getSettings().showTransportMessages, true);
+api.updateSettings({ dangerModeEnabled: false, unlockUseMeMode: true, rulePermissionMode: "useMe", useMeSuspendInactiveConflicts: true });
+assert.equal(api.getSettings().dangerModeEnabled, false);
+assert.equal(api.getSettings().unlockUseMeMode, false);
+assert.equal(api.getSettings().rulePermissionMode, "creator");
+assert.equal(api.getSettings().useMeSuspendInactiveConflicts, false);
+api.updateSettings({ dangerModeEnabled: true, unlockUseMeMode: true, rulePermissionMode: "useMe" });
+assert.equal(api.getSettings().dangerModeEnabled, true);
+assert.equal(api.getSettings().unlockUseMeMode, true);
+assert.equal(api.getSettings().rulePermissionMode, "useMe");
+localStore.delete("BCXIR_state_12345");
+Object.keys(bcxRuleConditions).forEach((key) => delete bcxRuleConditions[key]);
+context.window.Player.Appearance = [{
+  Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+  Craft: { Name: "Strict Blindfold", MemberNumber: 12345 },
+}];
+bcxRuleConditions.alt_restrict_sight = {
+  active: true,
+  favorite: false,
+  timer: null,
+  timerRemove: false,
+  requirements: null,
+  data: { enforce: true, log: true, customData: { blindnessStrength: "existing-active" } },
+};
+assert.equal(await api.syncNow("useme-active-conflict"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "existing-active");
+assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight, undefined);
+bcxRuleConditions.alt_restrict_sight.active = false;
+bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength = "existing-inactive";
+assert.equal(await api.syncNow("useme-inactive-conflict-no-suspend"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.active, false);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "existing-inactive");
+api.updateSettings({ useMeSuspendInactiveConflicts: true });
+assert.equal(await api.syncNow("useme-inactive-suspend"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.active, true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "light");
+let useMeManaged = JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight;
+assert.equal(useMeManaged.appliedContextKind, "useMe");
+assert.equal(useMeManaged.suspendedExistingInactive, true);
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("useme-inactive-restore"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.active, false);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "existing-inactive");
+assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight, undefined);
+api.updateSettings({ dangerModeEnabled: true, unlockUseMeMode: false, rulePermissionMode: "self", useMeSuspendInactiveConflicts: true });
+localStore.delete("BCXIR_state_12345");
+context.window.Player.Appearance = [{
+  Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+  Craft: { Name: "Strict Blindfold", MemberNumber: 12345 },
+}];
+bcxRuleConditions.alt_restrict_sight = {
+  active: false,
+  favorite: false,
+  timer: null,
+  timerRemove: false,
+  requirements: null,
+  data: { enforce: true, log: true, customData: { blindnessStrength: "self-existing-inactive" } },
+};
+assert.equal(await api.syncNow("replacement-without-useme"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.active, true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "light");
+let replacementManaged = JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight;
+assert.equal(replacementManaged.appliedContextKind, "self");
+assert.equal(replacementManaged.suspendedExistingInactive, true);
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("replacement-without-useme-restore"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.active, false);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "self-existing-inactive");
+assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight, undefined);
+api.updateSettings({ dangerModeEnabled: false, unlockUseMeMode: true, rulePermissionMode: "useMe", useMeSuspendInactiveConflicts: true });
+assert.equal(api.getSettings().rulePermissionMode, "creator");
+assert.equal(api.getSettings().unlockUseMeMode, false);
+assert.equal(api.getSettings().useMeSuspendInactiveConflicts, false);
 const updatedSettings = api.updateSettings({ enabled: false, debugLogging: true });
 assert.equal(updatedSettings.enabled, false);
 assert.equal(updatedSettings.debugLogging, true);
@@ -568,6 +683,27 @@ registeredExtensionSetting.click();
 assert.equal(api.getSettings().rulePermissionMode, "self");
 context.window.MouseX = 1300;
 context.window.MouseY = 817;
+registeredExtensionSetting.click();
+context.window.MouseX = 600;
+context.window.MouseY = 613;
+registeredExtensionSetting.click();
+context.window.MouseX = 1190;
+context.window.MouseY = 341;
+registeredExtensionSetting.click();
+assert.equal(api.getSettings().dangerModeEnabled, true);
+assert.equal(api.getSettings().unlockUseMeMode, false);
+context.window.MouseY = 477;
+registeredExtensionSetting.click();
+assert.equal(api.getSettings().unlockUseMeMode, false);
+assert.equal(api.getSettings().useMeSuspendInactiveConflicts, true);
+context.window.MouseY = 409;
+registeredExtensionSetting.click();
+assert.equal(api.getSettings().unlockUseMeMode, true);
+context.window.MouseY = 477;
+registeredExtensionSetting.click();
+assert.equal(api.getSettings().useMeSuspendInactiveConflicts, false);
+context.window.MouseX = 1300;
+context.window.MouseY = 681;
 registeredExtensionSetting.click();
 
 assert.equal(typeof api.openAuthoring, "function");

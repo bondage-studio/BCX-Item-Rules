@@ -63,7 +63,7 @@ export class SettingsRuntimeScreen extends SettingsScreen {
       ROWS.permissionMode,
       this.t("runtime.permissionMode"),
       this.t("runtime.permissionMode.tip"),
-      settings.rulePermissionMode === "creator" ? this.t("runtime.permission.creator") : this.t("runtime.permission.self"),
+      this.permissionModeLabel(settings.rulePermissionMode),
     );
     this.drawCheckbox(ROWS.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
     this.drawCheckbox(ROWS.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
@@ -89,7 +89,7 @@ export class SettingsRuntimeScreen extends SettingsScreen {
     const currentCache = cacheEntries[this.cacheIndex] || null;
 
     if (this.selectorClicked(ROWS.permissionMode)) {
-      this.update({ rulePermissionMode: settings.rulePermissionMode === "creator" ? "self" : "creator" });
+      this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.dangerModeEnabled && settings.unlockUseMeMode) });
     }
     if (this.checkboxClicked(ROWS.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
     if (this.checkboxClicked(ROWS.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
@@ -121,6 +121,17 @@ export class SettingsRuntimeScreen extends SettingsScreen {
     this.settingsStore.update(patch);
     this.synchronizer.startFallbackTimer();
     this.synchronizer.scheduleSync("settings");
+  }
+
+  private permissionModeLabel(mode: string): string {
+    if (mode === "useMe") return this.t("runtime.permission.useMe");
+    return mode === "creator" ? this.t("runtime.permission.creator") : this.t("runtime.permission.self");
+  }
+
+  private nextPermissionMode(mode: string, unlockUseMeMode: boolean): "creator" | "self" | "useMe" {
+    const modes: Array<"creator" | "self" | "useMe"> = unlockUseMeMode ? ["creator", "self", "useMe"] : ["creator", "self"];
+    const index = modes.indexOf(mode as "creator" | "self" | "useMe");
+    return modes[(index + 1) % modes.length];
   }
 
   private drawCacheActions(hasCurrentCache: boolean): void {

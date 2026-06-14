@@ -4,6 +4,7 @@ import type { RuleSynchronizer } from "../core/sync";
 import type { AuthoringSession } from "../authoring/authoring-session";
 import type { ItemRuleTransport } from "./item-rule-transport";
 import type { CreatorSenderQueryTransport } from "./creator-sender-query-transport";
+import type { UseMeQueryTransport } from "./use-me-query-transport";
 
 export function registerModSdkHooks(
   root: HostWindow,
@@ -11,6 +12,7 @@ export function registerModSdkHooks(
   authoring?: AuthoringSession,
   itemRuleTransport?: ItemRuleTransport,
   creatorSenderTransport?: CreatorSenderQueryTransport,
+  useMeTransport?: UseMeQueryTransport,
 ): boolean {
   const sdk = root.bcModSdk;
   if (!sdk || typeof sdk.registerMod !== "function") return false;
@@ -45,6 +47,7 @@ export function registerModSdkHooks(
     }
     itemRuleTransport?.install(modApi);
     creatorSenderTransport?.install(modApi);
+    useMeTransport?.install(modApi);
     return true;
   } catch (error) {
     console.warn("[BCXIR] Mod SDK registration failed.", error);

@@ -54,8 +54,11 @@ type EncodedPayload = {
 - Per-item `selfOnly` registry entries do not answer other players' requests.
 - `allowForeignItemRules=false` disables remote requests, remote cache application, and cached offline creator identities.
 - Desired active rules are computed from all registry/cache payloads for currently worn items.
-- Apply through BCX public Mod API queries in self mode, or through a controlled local BCX hidden-message query in creator mode so BCX sees the item creator as `sender`.
+- Apply through BCX public Mod API queries in self mode, through a controlled local BCX hidden-message query in creator mode so BCX sees the item creator as `sender`, or through the opt-in `Please use me` local operator mode.
 - Cached remote item rules can keep applying when the creator is offline by temporarily inserting a minimal local creator character into `ChatRoomCharacter`; this character is not drawn, synced, or granted forced item permission.
+- `Dangerous Mode` is a separate settings page with a master switch. After that master switch is enabled, `Please use me` and `Replacement Mode` are controlled by two independent switches.
+- `Please use me` temporarily inserts a local operator character for BCX handler calls, bypassing normal self-permission blocks without directly editing `Player.ExtensionSettings.BCX`.
+- `Replacement Mode` is switched independently from `Please use me`. It uses whichever Runtime permission mode is currently selected; existing active rules are still skipped, but inactive same-rule conflicts can be saved, replaced, and restored when the item is removed.
 
 ## Conflict Handling
 
@@ -89,8 +92,9 @@ src/
 - Store settings in `Player.ExtensionSettings.BCXIR`.
 - Keep local backup at `localStorage["BCXIR_<MemberNumber>_backup"]`.
 - Default rule permission mode is creator-based. Advanced settings can switch back to self mode or disable cached offline creator identities.
+- Dangerous Mode settings provide one master switch and two independent child switches: `Please use me` and `Replacement Mode`.
 - The settings menu owns item-rule registration through an LSCG-style `Item Rules` subpage.
-- Settings are split into overview, item rules, `Runtime / Sharing / Backup`, and `Diagnostics / Advanced` pages.
+- Settings are split into overview, item rules, `Runtime / Sharing / Backup`, `Dangerous Mode`, and `Diagnostics` pages.
 - The menu is intentionally deduplicated: item registration only keeps registration/editing controls, daily runtime/sharing/backup controls share one page, and diagnostics/advanced cleanup share one troubleshooting page.
 - The non-item asset scan toggle is not exposed in the menu; the runtime keeps the default item-category-only behavior unless changed through lower-level APIs.
 - Settings UI text uses a local i18n table with English fallback and Simplified Chinese support, selected from BC/browser language globals.
@@ -129,3 +133,4 @@ src/
 - `docs/plans/BCXIR_MENU_DEDUP_SIMPLIFICATION.md`
 - `docs/plans/BCXIR_I18N.md`
 - `docs/plans/BCXIR_LOADER_BUILD.md`
+- `docs/plans/BCXIR_USE_ME_MODE.md`

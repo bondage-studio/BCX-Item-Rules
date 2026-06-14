@@ -71,6 +71,7 @@ export class RuleSynchronizer {
 
       const current = this.bcx.getRulePublicData(conditionsData, ruleId);
       const managed = state.managed[ruleId];
+      const wasManaged = !!managed;
       const comparableCurrent = normalizeConditionForUpdate(current);
 
       if (managed?.lastApplied && comparableCurrent && !sameStable(comparableCurrent, managed.lastApplied)) {
@@ -80,11 +81,30 @@ export class RuleSynchronizer {
       }
 
       if (!managed && current) {
-        conflictMessages.push("Existing BCX rule not overwritten: " + ruleId);
-        continue;
+        const canSuspendInactive = settings.dangerModeEnabled === true &&
+          settings.useMeSuspendInactiveConflicts === true &&
+          comparableCurrent?.active === false;
+        if (!canSuspendInactive) {
+          conflictMessages.push(
+            comparableCurrent?.active === false && settings.dangerModeEnabled === true
+              ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId
+              : "Existing BCX rule not overwritten: " + ruleId,
+          );
+          continue;
+        }
+        state.managed[ruleId] = {
+          previousCondition: deepClone(comparableCurrent),
+          createdByUs: false,
+          payloadIds: [],
+          updatedAt: now(),
+          appliedSenderMemberNumber: applyContext.senderMemberNumber,
+          appliedSenderWasMinimal: applyContext.allowMinimalCreator,
+          appliedContextKind: applyContext.context.kind,
+          suspendedExistingInactive: true,
+        };
       }
 
-      if (!managed) {
+      if (!state.managed[ruleId]) {
         const okCreate = await this.bcx.ensureRuleExists(ruleId, conditionsData, applyContext.context);
         if (!okCreate) {
           conflictMessages.push("BCX refused to create rule: " + ruleId);
@@ -99,6 +119,7 @@ export class RuleSynchronizer {
           updatedAt: now(),
           appliedSenderMemberNumber: applyContext.senderMemberNumber,
           appliedSenderWasMinimal: applyContext.allowMinimalCreator,
+          appliedContextKind: applyContext.context.kind,
         };
       }
 
@@ -106,7 +127,11 @@ export class RuleSynchronizer {
       const updateData = makeRuleUpdateData(desired.conditionData, currentForUpdate);
       const okUpdate = await this.bcx.updateRule(ruleId, updateData, applyContext.context);
       if (okUpdate !== true) {
-        if (!managed && state.managed[ruleId]?.createdByUs) {
+        const createdState = state.managed[ruleId];
+        if (!wasManaged && createdState?.previousCondition) {
+          await this.bcx.updateRule(ruleId, createdState.previousCondition, applyContext.context).catch(() => false);
+          delete state.managed[ruleId];
+        } else if (!wasManaged && createdState?.createdByUs) {
           await this.bcx.deleteRule(ruleId, applyContext.context).catch(() => false);
           delete state.managed[ruleId];
         }
@@ -119,6 +144,7 @@ export class RuleSynchronizer {
       state.managed[ruleId].updatedAt = now();
       state.managed[ruleId].appliedSenderMemberNumber = applyContext.senderMemberNumber;
       state.managed[ruleId].appliedSenderWasMinimal = applyContext.allowMinimalCreator;
+      state.managed[ruleId].appliedContextKind = applyContext.context.kind;
       changedMessages.push("Applied " + ruleId);
     }
 
@@ -297,6 +323,9 @@ export class RuleSynchronizer {
     settings: BCXIRSettings,
   ): { context: RuleQueryContext; senderMemberNumber: number | null; allowMinimalCreator: boolean } | null {
     const playerNumber = this.getPlayerMemberNumber();
+    if (settings.rulePermissionMode === "useMe" && settings.dangerModeEnabled === true && settings.unlockUseMeMode === true) {
+      return { context: { kind: "useMe" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
+    }
     if (settings.rulePermissionMode === "self") {
       return { context: { kind: "self" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
     }
@@ -331,6 +360,9 @@ export class RuleSynchronizer {
     allowMinimalCreator: boolean;
   } {
     const playerNumber = this.getPlayerMemberNumber();
+    if (managed.appliedContextKind === "useMe") {
+      return { context: { kind: "useMe" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
+    }
     const sender = Number(managed.appliedSenderMemberNumber);
     if (!Number.isFinite(sender) || sender <= 0 || sender === playerNumber) {
       return { context: { kind: "self" }, senderMemberNumber: playerNumber, allowMinimalCreator: false };
