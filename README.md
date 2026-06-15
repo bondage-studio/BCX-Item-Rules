@@ -72,8 +72,8 @@ localStorage["BCXIR_rule_cache_<MemberNumber>"]
 When a matching item is worn:
 
 - If the item was created by the local player, BCXIR reads the local registry.
-- If the item was created by someone else, BCXIR checks the local cache.
-- If no cache exists, BCXIR requests the payload from `item.Craft.MemberNumber`.
+- If the item was created by someone else, BCXIR requests a fresh payload from `item.Craft.MemberNumber` first.
+- While waiting for a response, BCXIR uses the local cache as an immediate fallback if one exists.
 - Responses are accepted only from the item creator.
 - Unanswered requests use cooldown/backoff to avoid polling pressure.
 
@@ -272,8 +272,8 @@ localStorage["BCXIR_rule_cache_<MemberNumber>"]
 当玩家穿戴匹配道具时：
 
 - 如果道具由本地玩家制作，BCXIR 直接读取本地 registry。
-- 如果道具由其他玩家制作，BCXIR 先读取本地 cache。
-- 如果没有 cache，BCXIR 会向 `item.Craft.MemberNumber` 请求 payload。
+- 如果道具由其他玩家制作，BCXIR 会先向 `item.Craft.MemberNumber` 请求最新 payload。
+- 等待 response 时，如果本地已有 cache，BCXIR 会先用 cache 作为即时 fallback。
 - 只有来自道具制作者的 response 会被接受。
 - 未响应请求会进入冷却/退避，避免轮询压力。
 

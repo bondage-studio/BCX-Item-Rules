@@ -244,6 +244,9 @@ export class RuleSynchronizer {
             }
             if (Number.isFinite(crafter) && crafter > 0) {
               if (settings.allowForeignItemRules === false) return [];
+              if (settings.autoRequestForeignRules !== false) {
+                this.itemRuleTransport?.requestItemRules(item);
+              }
               const cached = getCachedItemRules(this.root, crafter, itemName);
               return cached ? [{
                 payload: cached.payload,
@@ -254,10 +257,6 @@ export class RuleSynchronizer {
               }] : [];
             }
             return [];
-          },
-          requestPayloadForItem: (item) => {
-            if (settings.allowForeignItemRules === false || settings.autoRequestForeignRules === false) return;
-            this.itemRuleTransport?.requestItemRules(item);
           },
         })
         : { desired: new Map(), payloadIds: [], errors: [], conflicts: [] };

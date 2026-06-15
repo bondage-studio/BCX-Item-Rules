@@ -546,12 +546,22 @@ api.updateSettings({
 });
 serverSends.length = 0;
 assert.equal(await api.syncNow("cached-creator-test"), true);
+assert.equal(serverSends.length, 1);
+assert.equal(serverSends[0].type, "AccountBeep");
+assert.equal(serverSends[0].packet.MemberNumber, 55555);
+assert.equal(serverSends[0].packet.Message.command.name, "bcxir-item-rules-request");
 const savedManaged = JSON.parse(localStore.get("BCXIR_state_12345")).managed;
 assert.equal(savedManaged.alt_restrict_sight.appliedSenderMemberNumber, 55555);
 assert.equal(savedManaged.alt_restrict_sight.appliedSenderWasMinimal, true);
 assert.equal(context.window.ChatRoomCharacter.some((character) => character.MemberNumber === 55555), false);
 assert.equal(context.window.ChatRoomCharacterDrawlist.some((character) => character.MemberNumber === 55555), false);
 assert.equal(serverSends.some((entry) => entry.type === "ChatRoomChat"), false);
+api.updateSettings({ autoRequestForeignRules: false });
+serverSends.length = 0;
+assert.equal(await api.syncNow("cached-without-auto-request"), true);
+assert.equal(serverSends.length, 0);
+assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight.appliedSenderMemberNumber, 55555);
+api.updateSettings({ autoRequestForeignRules: true });
 api.updateSettings({ allowForeignItemRules: false, autoRequestForeignRules: true });
 serverSends.length = 0;
 assert.equal(api.requestItemRules({

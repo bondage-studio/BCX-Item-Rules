@@ -12,7 +12,6 @@ import type { NormalizedPayload } from "../shared/types";
 import {
   cacheItemRules,
   findMatchingRegistryEntry,
-  getCachedItemRules,
   getItemNameAndDescriptionConcat,
   getItemRuleName,
   isPhraseInItemName,
@@ -122,7 +121,6 @@ export class ItemRuleTransport {
       this.debug("Item rule request skipped; item was crafted by the local player.", { crafter, itemName });
       return null;
     }
-    if (getCachedItemRules(this.root, crafter, itemName)) return null;
 
     const cacheKey = makeRuleCacheKey(crafter, itemName);
     const cooldown = this.cooldowns.get(cacheKey);

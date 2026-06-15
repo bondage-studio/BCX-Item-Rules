@@ -48,7 +48,7 @@ type EncodedPayload = {
 - On `CharacterRefresh`, room sync, wardrobe apply, and fallback ticks, scan `Player.Appearance`.
 - Only inspect worn items with `item.Asset.Group.Category === "Item"` by default.
 - Self-crafted item: resolve payload from the local registry.
-- Other-crafted item: resolve payload from local cache, or request it from `item.Craft.MemberNumber`.
+- Other-crafted item: first request a fresh payload from `item.Craft.MemberNumber`, then use the local cache as an immediate fallback while waiting for a response.
 - Received responses are accepted only from the item crafter and cached locally.
 - Repeated unresolved requests cool down from 30 seconds up to 10 minutes per crafter/item.
 - Per-item `selfOnly` registry entries do not answer other players' requests.

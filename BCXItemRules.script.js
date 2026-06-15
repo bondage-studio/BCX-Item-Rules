@@ -890,7 +890,7 @@
         const desiredInfo = settings.enabled ? collectDesiredRulesFromAppearance(player.Appearance, {
           scanItemCategoryOnly: settings.scanItemCategoryOnly,
           getLocalPayloadsForItem: (item) => {
-            var _a;
+            var _a, _b;
             const crafter = Number((_a = item == null ? void 0 : item.Craft) == null ? void 0 : _a.MemberNumber);
             const itemName = getItemRuleName(item);
             if (!itemName) return [];
@@ -906,6 +906,9 @@
             }
             if (Number.isFinite(crafter) && crafter > 0) {
               if (settings.allowForeignItemRules === false) return [];
+              if (settings.autoRequestForeignRules !== false) {
+                (_b = this.itemRuleTransport) == null ? void 0 : _b.requestItemRules(item);
+              }
               const cached = getCachedItemRules(this.root, crafter, itemName);
               return cached ? [{
                 payload: cached.payload,
@@ -916,11 +919,6 @@
               }] : [];
             }
             return [];
-          },
-          requestPayloadForItem: (item) => {
-            var _a;
-            if (settings.allowForeignItemRules === false || settings.autoRequestForeignRules === false) return;
-            (_a = this.itemRuleTransport) == null ? void 0 : _a.requestItemRules(item);
           }
         }) : { desired: /* @__PURE__ */ new Map(), payloadIds: [], errors: [], conflicts: [] };
         if (!settings.enabled && settings.debugLogging) {
@@ -3490,7 +3488,6 @@
         this.debug("Item rule request skipped; item was crafted by the local player.", { crafter, itemName });
         return null;
       }
-      if (getCachedItemRules(this.root, crafter, itemName)) return null;
       const cacheKey = makeRuleCacheKey(crafter, itemName);
       const cooldown = this.cooldowns.get(cacheKey);
       if (cooldown && cooldown.nextAllowedAt > now()) {
