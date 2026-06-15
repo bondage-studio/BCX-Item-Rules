@@ -7,7 +7,7 @@ const loaderSource = fs.readFileSync(new URL("./BCXItemRules.loader.user.js", im
 const installAliasSource = fs.readFileSync(new URL("./BCXItemRules.user.js", import.meta.url), "utf8");
 assert.match(loaderSource, /BCX Item Rules Loader/);
 assert.match(loaderSource, /BCXItemRules\.script\.js/);
-assert.match(loaderSource, /GM_xmlhttpRequest/);
+assert.match(loaderSource, /createElement\("script"\)/);
 assert.match(loaderSource, /Date\.now\(\)/);
 assert.equal(installAliasSource, loaderSource);
 

@@ -36,17 +36,11 @@ console.log("Copied dist/" + scriptFileName + " to " + scriptFileName);
 console.log("Wrote " + loaderFileName + " and BCXItemRules.user.js loader alias");
 
 function makeLoader({ version, scriptUrl, lzStringUrl }) {
-  const connectHosts = [
-    new URL(scriptUrl).hostname,
-    new URL(lzStringUrl).hostname,
-  ];
-  const uniqueConnectHosts = Array.from(new Set(connectHosts));
-  const connectBlock = uniqueConnectHosts.map((host) => "// @connect      " + host).join("\n");
   return `// ==UserScript==
 // @name         BCX Item Rules Loader
 // @namespace    https://github.com/bondage-studio
 // @version      ${version}
-// @description  Loader for BCX Item Rules. Fetches the latest hosted script with cache busting.
+// @description  Loader for BCX Item Rules. Loads the latest hosted runtime script from GitHub Pages.
 // @author       Bondage Studio
 // @match        https://bondageprojects.elementfx.com/*
 // @match        https://www.bondageprojects.elementfx.com/*
@@ -56,78 +50,42 @@ function makeLoader({ version, scriptUrl, lzStringUrl }) {
 // @match        https://www.bondageprojects.com/*
 // @match        https://bondage-asia.com/*
 // @match        https://www.bondage-asia.com/*
-// @grant        GM_xmlhttpRequest
-// @grant        unsafeWindow
-${connectBlock}
+// @grant        none
 // @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const BCXIR_LOADER_VERSION = ${JSON.stringify(version)};
   const BCXIR_SCRIPT_URL = ${JSON.stringify(scriptUrl)};
   const BCXIR_LZ_STRING_URL = ${JSON.stringify(lzStringUrl)};
-  const BCXIR_ROOT = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
 
-  function cacheBust(url) {
-    const separator = url.includes("?") ? "&" : "?";
-    return url + separator + "bcxirLoader=" + encodeURIComponent(BCXIR_LOADER_VERSION) + "&t=" + Date.now();
-  }
-
-  function requestText(url) {
+  // GitHub Pages serves the runtime with a JavaScript content type, so a plain
+  // <script src> injection runs it directly — no GM_xmlhttpRequest or eval needed.
+  function loadScript(url) {
     return new Promise((resolve, reject) => {
-      const request = typeof GM_xmlhttpRequest === "function"
-        ? GM_xmlhttpRequest
-        : globalThis.GM?.xmlHttpRequest;
-      if (typeof request !== "function") {
-        reject(new Error("GM_xmlhttpRequest is unavailable."));
-        return;
-      }
-      request({
-        method: "GET",
-        url: cacheBust(url),
-        nocache: true,
-        onload(response) {
-          const status = Number(response.status || 0);
-          if (status >= 200 && status < 300 && typeof response.responseText === "string") {
-            resolve(response.responseText);
-          } else {
-            reject(new Error("Failed to load " + url + " status=" + status));
-          }
-        },
-        onerror(error) {
-          reject(error instanceof Error ? error : new Error("Failed to load " + url));
-        },
-        ontimeout() {
-          reject(new Error("Timed out loading " + url));
-        },
-      });
+      const element = document.createElement("script");
+      element.src = url;
+      element.onload = () => resolve();
+      element.onerror = () => reject(new Error("Failed to load " + url));
+      (document.head || document.documentElement).appendChild(element);
     });
   }
 
-  function evaluate(source, sourceUrl) {
-    const code = source + "\\n//# sourceURL=" + sourceUrl;
-    if (BCXIR_ROOT && typeof BCXIR_ROOT.eval === "function") {
-      BCXIR_ROOT.eval(code);
-      return;
-    }
-    (0, eval)(code);
-  }
-
   async function load() {
-    if (!BCXIR_ROOT.LZString) {
-      evaluate(await requestText(BCXIR_LZ_STRING_URL), BCXIR_LZ_STRING_URL);
+    if (!window.LZString) {
+      await loadScript(BCXIR_LZ_STRING_URL);
     }
-    evaluate(await requestText(BCXIR_SCRIPT_URL), BCXIR_SCRIPT_URL);
+    // Cache-bust only our own script so published updates take effect immediately.
+    await loadScript(BCXIR_SCRIPT_URL + "?t=" + Date.now());
   }
 
   load().catch((error) => {
     console.error("[BCXIR Loader] Failed to load BCX Item Rules.", error);
     try {
       const message = "[BCXIR Loader] Failed to load BCX Item Rules: " + (error?.message || String(error));
-      if (typeof BCXIR_ROOT.ChatRoomSendLocal === "function") BCXIR_ROOT.ChatRoomSendLocal(message, 10000);
-      else if (typeof BCXIR_ROOT.InfoBeep === "function") BCXIR_ROOT.InfoBeep(message, 10000);
+      if (typeof window.ChatRoomSendLocal === "function") window.ChatRoomSendLocal(message, 10000);
+      else if (typeof window.InfoBeep === "function") window.InfoBeep(message, 10000);
     } catch {
       /* Best effort only. */
     }

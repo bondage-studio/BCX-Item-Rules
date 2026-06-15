@@ -1,4 +1,4 @@
-﻿# BCX Item Rules
+# BCX Item Rules
 
 [中文说明](#中文说明)
 
@@ -11,13 +11,13 @@ BCXIR does not write to BCX internal storage.
 Install the loader in Tampermonkey:
 
 ```text
-https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.loader.user.js
+https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js
 ```
 
 Compatibility alias:
 
 ```text
-https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.user.js
+https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.user.js
 ```
 
 You also need BCX installed and available in game as `window.bcx`.
@@ -26,16 +26,16 @@ You also need BCX installed and available in game as `window.bcx`.
 
 Users install only `BCXItemRules.loader.user.js`.
 
-The loader fetches the online runtime script:
+The loader injects the online runtime script from GitHub Pages:
 
 ```text
-BCXItemRules.script.js
+https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.script.js
 ```
 
-Every fetch appends cache-busting parameters:
+Because GitHub Pages serves it with a JavaScript content type, the loader appends it as a plain `<script>` tag — no `GM_xmlhttpRequest` or `eval`, so it runs with `@grant none`. Each load appends a cache-busting parameter:
 
 ```text
-?bcxirLoader=<version>&t=<Date.now()>
+?t=<Date.now()>
 ```
 
 This keeps the installed userscript small and lets published script updates take effect without asking users to reinstall the loader.
@@ -163,7 +163,7 @@ The hosted script base URL is configured in `package.json`:
 ```json
 {
   "bcxir": {
-    "remoteBase": "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main"
+    "remoteBase": "https://bondage-studio.github.io/BCX-Item-Rules"
   }
 }
 ```
@@ -211,13 +211,13 @@ BCXIR 不会写入 BCX 的内部存档。
 在 Tampermonkey 中安装 loader：
 
 ```text
-https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.loader.user.js
+https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js
 ```
 
 兼容旧链接的别名：
 
 ```text
-https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRules.user.js
+https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.user.js
 ```
 
 你还需要安装 BCX，并确保游戏中存在 `window.bcx`。
@@ -226,16 +226,16 @@ https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main/BCXItemRule
 
 用户只需要安装 `BCXItemRules.loader.user.js`。
 
-loader 会在线拉取真正的运行脚本：
+loader 会从 GitHub Pages 在线注入真正的运行脚本：
 
 ```text
-BCXItemRules.script.js
+https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.script.js
 ```
 
-每次请求都会追加缓存爆破参数：
+由于 GitHub Pages 以 JavaScript content type 返回该文件，loader 直接以普通 `<script>` 标签注入运行——不再需要 `GM_xmlhttpRequest` 或 `eval`，因此使用 `@grant none`。每次加载都会追加缓存爆破参数：
 
 ```text
-?bcxirLoader=<version>&t=<Date.now()>
+?t=<Date.now()>
 ```
 
 这样安装脚本保持很小，而发布新的运行脚本后，用户通常不需要重新安装 loader。
@@ -363,7 +363,7 @@ http://127.0.0.1:5181
 ```json
 {
   "bcxir": {
-    "remoteBase": "https://raw.githubusercontent.com/bondage-studio/BCX-Item-Rules/main"
+    "remoteBase": "https://bondage-studio.github.io/BCX-Item-Rules"
   }
 }
 ```
