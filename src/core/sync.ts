@@ -13,6 +13,8 @@ import {
   findMatchingRegistryEntry,
   getCachedItemRules,
   getItemRuleName,
+  makeRuleCacheKey,
+  normalizeItemName,
 } from "./item-registry";
 import { canRefreshRemoteItemRules } from "./worn-item-lock";
 
@@ -226,6 +228,8 @@ export class RuleSynchronizer {
       const player = this.root.Player;
       if (!player || !Array.isArray(player.Appearance)) return false;
       const settings = this.settingsStore.get();
+      const state = loadState(this.root);
+      const currentItemKeys = new Set<string>();
       const desiredInfo = settings.enabled
         ? collectDesiredRulesFromAppearance(player.Appearance, {
           scanItemCategoryOnly: settings.scanItemCategoryOnly,
@@ -233,37 +237,83 @@ export class RuleSynchronizer {
             const crafter = Number(item?.Craft?.MemberNumber);
             const itemName = getItemRuleName(item);
             if (!itemName) return [];
-            if (Number.isFinite(crafter) && crafter > 0 && crafter === Number(player.MemberNumber)) {
+            const playerNumber = Number(player.MemberNumber);
+            const isLocalItem = Number.isFinite(crafter) && crafter > 0 && crafter === playerNumber;
+            const itemKey = this.makeActiveItemPayloadKey(isLocalItem ? playerNumber : crafter, itemName);
+            if (itemKey) currentItemKeys.add(itemKey);
+
+            const activePayload = itemKey ? state.activeItemPayloads[itemKey] : null;
+            if (activePayload) {
+              if (activePayload.originatorSource === "cache" && settings.allowForeignItemRules === false) {
+                if (itemKey) delete state.activeItemPayloads[itemKey];
+                return [];
+              }
+              return [{
+                payload: activePayload.payload,
+                originatorMemberNumber: activePayload.originatorMemberNumber,
+                originatorSource: activePayload.originatorSource,
+                allowMinimalCreator: activePayload.allowMinimalCreator,
+                itemName: activePayload.itemName,
+              }];
+            }
+
+            if (isLocalItem) {
               const entry = findMatchingRegistryEntry(this.root, item);
-              return entry ? [{
+              if (!entry) return [];
+              if (itemKey) {
+                state.activeItemPayloads[itemKey] = {
+                  payload: deepClone(entry.payload),
+                  originatorMemberNumber: Number(player.MemberNumber),
+                  originatorSource: "registry",
+                  allowMinimalCreator: false,
+                  itemName,
+                  updatedAt: now(),
+                };
+              }
+              return [{
                 payload: entry.payload,
                 originatorMemberNumber: Number(player.MemberNumber),
                 originatorSource: "registry" as const,
                 allowMinimalCreator: false,
                 itemName,
-              }] : [];
+              }];
             }
             if (Number.isFinite(crafter) && crafter > 0) {
               if (settings.allowForeignItemRules === false) return [];
               if (
                 settings.autoRequestForeignRules !== false &&
+                itemKey &&
+                !state.activeItemPayloads[itemKey] &&
                 canRefreshRemoteItemRules(this.root, settings, crafter, itemName)
               ) {
                 this.itemRuleTransport?.requestItemRules(item);
               }
               const cached = getCachedItemRules(this.root, crafter, itemName);
-              return cached ? [{
+              if (!cached) return [];
+              if (itemKey) {
+                state.activeItemPayloads[itemKey] = {
+                  payload: deepClone(cached.payload),
+                  originatorMemberNumber: crafter,
+                  originatorSource: "cache",
+                  allowMinimalCreator: settings.allowCachedOfflineCreator,
+                  itemName,
+                  updatedAt: now(),
+                };
+              }
+              return [{
                 payload: cached.payload,
                 originatorMemberNumber: crafter,
                 originatorSource: "cache" as const,
                 allowMinimalCreator: settings.allowCachedOfflineCreator,
                 itemName,
-              }] : [];
+              }];
             }
             return [];
           },
         })
         : { desired: new Map(), payloadIds: [], errors: [], conflicts: [] };
+      this.pruneActiveItemPayloads(state, currentItemKeys, settings);
+      saveState(this.root, state);
       if (!settings.enabled && settings.debugLogging) {
         console.info("[BCXIR] Runtime disabled; releasing managed rules.");
       }
@@ -381,6 +431,29 @@ export class RuleSynchronizer {
   private getPlayerMemberNumber(): number | null {
     const memberNumber = Number(this.root.Player?.MemberNumber);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+  }
+
+  private makeActiveItemPayloadKey(crafter: unknown, itemName: string): string | null {
+    const memberNumber = Number(crafter);
+    const normalizedItemName = normalizeItemName(itemName);
+    if (!Number.isFinite(memberNumber) || memberNumber <= 0 || !normalizedItemName) return null;
+    return makeRuleCacheKey(memberNumber, normalizedItemName);
+  }
+
+  private pruneActiveItemPayloads(
+    state: ReturnType<typeof loadState>,
+    currentItemKeys: Set<string>,
+    settings: BCXIRSettings,
+  ): void {
+    for (const [itemKey, active] of Object.entries(state.activeItemPayloads)) {
+      if (!currentItemKeys.has(itemKey)) {
+        delete state.activeItemPayloads[itemKey];
+        continue;
+      }
+      if (active.originatorSource === "cache" && settings.allowForeignItemRules === false) {
+        delete state.activeItemPayloads[itemKey];
+      }
+    }
   }
 
   private errorMessage(error: unknown): string {

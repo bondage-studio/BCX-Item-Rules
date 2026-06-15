@@ -91,9 +91,19 @@ export interface ManagedRuleState {
   suspendedExistingInactive?: boolean;
 }
 
+export interface ActiveItemPayloadState {
+  payload: NormalizedPayload;
+  originatorMemberNumber: number | null;
+  originatorSource: RuleOriginatorSource;
+  allowMinimalCreator: boolean;
+  itemName: string;
+  updatedAt: number;
+}
+
 export interface LocalState {
   version: 1;
   activePayloadIds: string[];
+  activeItemPayloads: Record<string, ActiveItemPayloadState>;
   managed: Record<string, ManagedRuleState>;
 }
 

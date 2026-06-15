@@ -18,7 +18,9 @@ import {
   makeRuleCacheKey,
 } from "../core/item-registry";
 import { normalizePayload } from "../core/protocol";
+import { isWearerItem } from "../core/scanner";
 import { canRefreshRemoteItemRules } from "../core/worn-item-lock";
+import { loadState, saveState } from "../shared/storage";
 import { deepClone, isPlainObject, now } from "../shared/utils";
 import { Reporter } from "./reporter";
 import type { SettingsStore } from "../settings/settings-storage";
@@ -298,6 +300,7 @@ export class ItemRuleTransport {
       return;
     }
     cacheItemRules(this.root, sender, pending.itemName, message.payload);
+    this.freezeFreshPayloadIfCurrentlyWorn(sender, pending.itemName, message.payload);
     this.pending.delete(message.requestId);
     this.cooldowns.delete(pending.cacheKey);
     this.debug("Item rule response cached.", { sender, requestId: message.requestId, itemName: pending.itemName });
@@ -332,6 +335,30 @@ export class ItemRuleTransport {
       Craft: item?.Craft ? deepClone(item.Craft) : undefined,
       Property: item?.Property ? deepClone(item.Property) : undefined,
     };
+  }
+
+  private freezeFreshPayloadIfCurrentlyWorn(crafter: number, itemName: string, payload: NormalizedPayload): void {
+    const settings = this.settingsStore?.get();
+    if (settings?.allowForeignItemRules === false) return;
+    const appearance = Array.isArray(this.root.Player?.Appearance) ? this.root.Player.Appearance : [];
+    const isWorn = appearance.some((item: any) => {
+      if (!isWearerItem(item, { scanItemCategoryOnly: settings?.scanItemCategoryOnly })) return false;
+      return this.normalizeMemberNumber(item?.Craft?.MemberNumber) === crafter &&
+        makeRuleCacheKey(crafter, getItemRuleName(item)) === makeRuleCacheKey(crafter, itemName);
+    });
+    if (!isWorn) return;
+    const state = loadState(this.root);
+    const itemKey = makeRuleCacheKey(crafter, itemName);
+    if (state.activeItemPayloads[itemKey]) return;
+    state.activeItemPayloads[itemKey] = {
+      payload: deepClone(payload),
+      originatorMemberNumber: crafter,
+      originatorSource: "cache",
+      allowMinimalCreator: settings?.allowCachedOfflineCreator !== false,
+      itemName,
+      updatedAt: now(),
+    };
+    saveState(this.root, state);
   }
 
   private toEnvelope(target: number, message: ItemRuleMessage): BCXIRCommandEnvelope {

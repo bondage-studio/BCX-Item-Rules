@@ -550,6 +550,7 @@ assert.equal(serverSends.length, 1);
 assert.equal(serverSends[0].type, "AccountBeep");
 assert.equal(serverSends[0].packet.MemberNumber, 55555);
 assert.equal(serverSends[0].packet.Message.command.name, "bcxir-item-rules-request");
+const wornRemoteRefreshRequestId = serverSends[0].packet.Message.command.args.find((arg) => arg.name === "requestId").value;
 const savedManaged = JSON.parse(localStore.get("BCXIR_state_12345")).managed;
 assert.equal(savedManaged.alt_restrict_sight.appliedSenderMemberNumber, 55555);
 assert.equal(savedManaged.alt_restrict_sight.appliedSenderWasMinimal, true);
@@ -561,6 +562,78 @@ serverSends.length = 0;
 assert.equal(await api.syncNow("cached-without-auto-request"), true);
 assert.equal(serverSends.length, 0);
 assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight.appliedSenderMemberNumber, 55555);
+runHook("ServerAccountBeep", [{
+  MemberNumber: 55555,
+  BeepType: "Leash",
+  Message: {
+    IsBCXIR: true,
+    type: "command",
+    target: 12345,
+    version: 1,
+    command: {
+      name: "bcxir-item-rules-response",
+      args: [
+        { name: "requestId", value: wornRemoteRefreshRequestId },
+        { name: "itemName", value: "Response Test" },
+        { name: "payload", value: { v: 1, id: "remote-fresh", r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "remote-fresh" } }] } },
+      ],
+    },
+  },
+}], () => {});
+assert.equal(api.getRuleCache().find((entry) => entry.itemName === "Response Test").payload.id, "remote-fresh");
+assert.equal(await api.syncNow("remote-refresh-while-worn"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "heavy");
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("remote-freeze-remove"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight, undefined);
+context.window.Player.Appearance = [{
+  Asset: { Name: "Gag", Group: { Name: "ItemMouth", Category: "Item" } },
+  Craft: { Name: "Response Test", MemberNumber: 55555 },
+}];
+assert.equal(await api.syncNow("remote-freeze-rewear"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "remote-fresh");
+api.updateSettings({ autoRequestForeignRules: true });
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("fresh-response-cleanup"), true);
+api.clearRequestCooldowns();
+serverSends.length = 0;
+context.window.Player.Appearance = [{
+  Asset: { Name: "Gag", Group: { Name: "ItemMouth", Category: "Item" } },
+  Craft: { Name: "Fresh Response", MemberNumber: 66666 },
+}];
+assert.equal(await api.syncNow("fresh-response-request"), true);
+assert.equal(serverSends.length, 1);
+const freshResponseRequestId = serverSends[0].packet.Message.command.args.find((arg) => arg.name === "requestId").value;
+runHook("ServerAccountBeep", [{
+  MemberNumber: 66666,
+  BeepType: "Leash",
+  Message: {
+    IsBCXIR: true,
+    type: "command",
+    target: 12345,
+    version: 1,
+    command: {
+      name: "bcxir-item-rules-response",
+      args: [
+        { name: "requestId", value: freshResponseRequestId },
+        { name: "itemName", value: "Fresh Response" },
+        { name: "payload", value: { v: 1, id: "fresh-response", r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "fresh-response" } }] } },
+      ],
+    },
+  },
+}], () => {});
+serverSends.length = 0;
+assert.equal(await api.syncNow("fresh-response-apply"), true);
+assert.equal(serverSends.length, 0);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "fresh-response");
+const freshExtensionDocument = JSON.parse(fakeLz.decompressFromBase64(context.window.Player.ExtensionSettings.BCXIR));
+assert.equal(freshExtensionDocument.activeItemPayloads["66666:fresh response"].payload.id, "fresh-response");
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("fresh-response-remove"), true);
+context.window.Player.Appearance = [{
+  Asset: { Name: "Gag", Group: { Name: "ItemMouth", Category: "Item" } },
+  Craft: { Name: "Response Test", MemberNumber: 55555 },
+}];
 api.updateSettings({ autoRequestForeignRules: true });
 api.updateSettings({ lockWornItemRules: true });
 assert.equal(api.getSettings().lockWornItemRules, true);
@@ -645,6 +718,77 @@ assert.equal(api.getSettings().rulePermissionMode, "creator");
 assert.equal(api.getSettings().allowCachedOfflineCreator, true);
 assert.equal(api.getSettings().allowForeignItemRules, false);
 api.updateSettings({ allowForeignItemRules: true });
+api.registerItemRules("Local Freeze", {
+  v: 1,
+  id: "local-freeze-old",
+  r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "local-old" } }],
+});
+context.window.Player.Appearance = [{
+  Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+  Craft: { Name: "Local Freeze", MemberNumber: 12345 },
+}];
+assert.equal(await api.syncNow("local-freeze-wear"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "local-old");
+api.updateRegisteredItem("Local Freeze", {
+  payload: {
+    v: 1,
+    id: "local-freeze-new",
+    r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "local-new" } }],
+  },
+});
+assert.equal(await api.syncNow("local-freeze-registry-update-while-worn"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "local-old");
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("local-freeze-remove"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight, undefined);
+context.window.Player.Appearance = [{
+  Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+  Craft: { Name: "Local Freeze", MemberNumber: 12345 },
+}];
+assert.equal(await api.syncNow("local-freeze-rewear"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "local-new");
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("local-freeze-final-remove"), true);
+Object.keys(bcxRuleConditions).forEach((key) => delete bcxRuleConditions[key]);
+const localPriorityState = {
+  version: 1,
+  activePayloadIds: [],
+  activeItemPayloads: {
+    "99999:priority item": {
+      payload: { v: 1, id: "local-priority-old", r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "local-priority-old" } }] },
+      originatorMemberNumber: 99999,
+      originatorSource: "cache",
+      allowMinimalCreator: true,
+      itemName: "Priority Item",
+      updatedAt: 1,
+    },
+  },
+  managed: {},
+};
+localStore.set("BCXIR_state_12345", JSON.stringify(localPriorityState));
+context.window.Player.ExtensionSettings.BCXIR = fakeLz.compressToBase64(JSON.stringify({
+  v: 1,
+  settings: api.getSettings(),
+  activeItemPayloads: {
+    "99999:priority item": {
+      payload: { v: 1, id: "extension-priority-new", r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "extension-priority-new" } }] },
+      originatorMemberNumber: 99999,
+      originatorSource: "cache",
+      allowMinimalCreator: true,
+      itemName: "Priority Item",
+      updatedAt: 2,
+    },
+  },
+}));
+context.window.Player.Appearance = [{
+  Asset: { Name: "Gag", Group: { Name: "ItemMouth", Category: "Item" } },
+  Craft: { Name: "Priority Item", MemberNumber: 99999 },
+}];
+assert.equal(await api.syncNow("extension-snapshot-priority"), true);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "extension-priority-new");
+assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).activeItemPayloads["99999:priority item"].payload.id, "extension-priority-new");
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("extension-snapshot-priority-remove"), true);
 assert.equal(api.getSettings().respondToRuleRequests, true);
 assert.equal(api.getSettings().autoRequestForeignRules, true);
 assert.equal(api.getSettings().showTransportMessages, true);

@@ -1,6 +1,7 @@
 import { SETTINGS_BACKUP_PREFIX, SETTINGS_EXTENSION_KEY } from "../shared/constants";
 import type { HostWindow } from "../platform/root";
 import type { BCXIRSettings } from "../shared/types";
+import { decodeExtensionSettingsRaw, encodeExtensionSettingsRaw } from "../shared/extension-settings-codec";
 import { deepClone, isPlainObject } from "../shared/utils";
 import { filterSettingsPatchForWornItemLock } from "../core/worn-item-lock";
 
@@ -36,18 +37,6 @@ export function getSettingsBackupKey(root: HostWindow): string {
   return SETTINGS_BACKUP_PREFIX + number + "_backup";
 }
 
-function getLz(root: HostWindow): Pick<NonNullable<Window["LZString"]>, "compressToBase64" | "decompressFromBase64"> | null {
-  const lz = root.LZString || (globalThis as any).LZString;
-  if (
-    lz &&
-    typeof lz.compressToBase64 === "function" &&
-    typeof lz.decompressFromBase64 === "function"
-  ) {
-    return lz;
-  }
-  return null;
-}
-
 export function normalizeSettings(value: unknown): BCXIRSettings {
   const source = isPlainObject(value) ? value : {};
   const dangerModeEnabled = source.dangerModeEnabled === true;
@@ -79,20 +68,33 @@ export function normalizeSettings(value: unknown): BCXIRSettings {
 }
 
 function decodeSettings(root: HostWindow, raw: unknown): BCXIRSettings | null {
-  if (typeof raw !== "string" || !raw) return null;
-  const lz = getLz(root);
-  if (!lz) throw new Error("LZString base64 codec is unavailable");
-  const json = lz.decompressFromBase64(raw);
-  if (!json) throw new Error("settings decompression failed");
-  return normalizeSettings(JSON.parse(json));
+  const decoded = decodeExtensionSettingsRaw(root, raw);
+  if (!decoded) return null;
+  const settings = isPlainObject(decoded) && isPlainObject(decoded.settings) ? decoded.settings : decoded;
+  return normalizeSettings(settings);
 }
 
 function encodeSettings(root: HostWindow, settings: BCXIRSettings): string {
-  const lz = getLz(root);
-  if (!lz) throw new Error("LZString base64 codec is unavailable");
-  const encoded = lz.compressToBase64(JSON.stringify(normalizeSettings(settings)));
-  if (typeof encoded !== "string" || !encoded) throw new Error("settings compression failed");
-  return encoded;
+  const activeItemPayloads = readExistingActiveItemPayloads(root);
+  const document = activeItemPayloads
+    ? { v: 1, settings: normalizeSettings(settings), activeItemPayloads }
+    : { v: 1, settings: normalizeSettings(settings) };
+  return encodeExtensionSettingsRaw(root, document);
+}
+
+function readExistingActiveItemPayloads(root: HostWindow): unknown | null {
+  for (const raw of [
+    root.Player?.ExtensionSettings?.[SETTINGS_EXTENSION_KEY],
+    root.localStorage?.getItem(getSettingsBackupKey(root)),
+  ]) {
+    try {
+      const decoded = decodeExtensionSettingsRaw(root, raw);
+      if (isPlainObject(decoded) && isPlainObject(decoded.activeItemPayloads)) return decoded.activeItemPayloads;
+    } catch {
+      // Preserve settings saves even if the previous document cannot be decoded.
+    }
+  }
+  return null;
 }
 
 export class ExtensionSettingsStore implements SettingsStore {

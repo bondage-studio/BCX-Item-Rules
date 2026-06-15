@@ -319,7 +319,7 @@
       payload,
       source: {
         payloadId: payload.id,
-        originatorMemberNumber: normalizeMemberNumber$1(payloadInfo.originatorMemberNumber),
+        originatorMemberNumber: normalizeMemberNumber$2(payloadInfo.originatorMemberNumber),
         originatorSource: payloadInfo.originatorSource || "unknown",
         allowMinimalCreator: payloadInfo.allowMinimalCreator === true,
         itemName: payloadInfo.itemName
@@ -329,7 +329,7 @@
   function isPayloadWithOrigin(value) {
     return !!value && typeof value === "object" && "payload" in value;
   }
-  function normalizeMemberNumber$1(value) {
+  function normalizeMemberNumber$2(value) {
     const memberNumber = Number(value);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
   }
@@ -583,13 +583,13 @@
       remoteItemKeys: /* @__PURE__ */ new Set()
     };
     if (!state.enabled) return state;
-    const playerNumber = normalizeMemberNumber((_a = root.Player) == null ? void 0 : _a.MemberNumber);
+    const playerNumber = normalizeMemberNumber$1((_a = root.Player) == null ? void 0 : _a.MemberNumber);
     const appearance = Array.isArray((_b = root.Player) == null ? void 0 : _b.Appearance) ? root.Player.Appearance : [];
     for (const item of appearance) {
       if (!isWearerItem(item, { scanItemCategoryOnly: settings.scanItemCategoryOnly })) continue;
       const itemName = getItemRuleName(item);
       if (!itemName) continue;
-      const crafter = normalizeMemberNumber((_c = item == null ? void 0 : item.Craft) == null ? void 0 : _c.MemberNumber);
+      const crafter = normalizeMemberNumber$1((_c = item == null ? void 0 : item.Craft) == null ? void 0 : _c.MemberNumber);
       if (playerNumber != null && crafter === playerNumber) {
         const entry = findMatchingRegistryEntry(root, item);
         if (!entry) continue;
@@ -634,7 +634,7 @@
     for (const key of LOCKED_SETTING_KEYS) delete next[key];
     return next;
   }
-  function normalizeMemberNumber(value) {
+  function normalizeMemberNumber$1(value) {
     const memberNumber = Number(value);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
   }
@@ -748,6 +748,28 @@
   function getRoot() {
     return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   }
+  function decodeExtensionSettingsRaw(root, raw) {
+    if (typeof raw !== "string" || !raw) return null;
+    const lz = getLz(root);
+    if (!lz) throw new Error("LZString base64 codec is unavailable");
+    const json = lz.decompressFromBase64(raw);
+    if (!json) throw new Error("extension settings decompression failed");
+    return JSON.parse(json);
+  }
+  function encodeExtensionSettingsRaw(root, value) {
+    const lz = getLz(root);
+    if (!lz) throw new Error("LZString base64 codec is unavailable");
+    const encoded = lz.compressToBase64(JSON.stringify(value));
+    if (typeof encoded !== "string" || !encoded) throw new Error("extension settings compression failed");
+    return encoded;
+  }
+  function getLz(root) {
+    const lz = root.LZString || globalThis.LZString;
+    if (lz && typeof lz.compressToBase64 === "function" && typeof lz.decompressFromBase64 === "function") {
+      return lz;
+    }
+    return null;
+  }
   function getPlayerNumber(root) {
     const value = root.Player && root.Player.MemberNumber;
     return value == null ? "DEFAULT" : String(value);
@@ -755,18 +777,28 @@
   function storageKey(root) {
     return STORAGE_PREFIX + getPlayerNumber(root);
   }
+  function settingsBackupKey(root) {
+    return SETTINGS_BACKUP_PREFIX + getPlayerNumber(root) + "_backup";
+  }
   function emptyState() {
-    return { version: 1, activePayloadIds: [], managed: {} };
+    return { version: 1, activePayloadIds: [], activeItemPayloads: {}, managed: {} };
   }
   function loadState(root) {
     try {
+      const extensionActiveItemPayloads = loadActiveItemPayloadsFromExtensionSettings(root);
       const raw = root.localStorage && root.localStorage.getItem(storageKey(root));
-      if (!raw) return emptyState();
+      if (!raw) {
+        return {
+          ...emptyState(),
+          activeItemPayloads: extensionActiveItemPayloads.value
+        };
+      }
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object") throw new Error("bad state");
       return {
         version: 1,
         activePayloadIds: Array.isArray(parsed.activePayloadIds) ? parsed.activePayloadIds : [],
+        activeItemPayloads: extensionActiveItemPayloads.found ? extensionActiveItemPayloads.value : normalizeActiveItemPayloads(parsed.activeItemPayloads),
         managed: parsed.managed && typeof parsed.managed === "object" ? parsed.managed : {}
       };
     } catch (error) {
@@ -777,9 +809,85 @@
   function saveState(root, state) {
     try {
       root.localStorage && root.localStorage.setItem(storageKey(root), JSON.stringify(state));
+      syncActiveItemPayloadsToExtensionSettings(root, state.activeItemPayloads);
     } catch (error) {
       console.warn("[BCXIR] Failed to save local state.", error);
     }
+  }
+  function loadActiveItemPayloadsFromExtensionSettings(root) {
+    var _a, _b, _c;
+    for (const raw of [
+      (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY],
+      (_c = root.localStorage) == null ? void 0 : _c.getItem(settingsBackupKey(root))
+    ]) {
+      try {
+        const decoded = decodeExtensionSettingsRaw(root, raw);
+        if (isPlainObject(decoded) && isPlainObject(decoded.activeItemPayloads)) {
+          return { found: true, value: normalizeActiveItemPayloads(decoded.activeItemPayloads) };
+        }
+        if (isPlainObject(decoded) && isPlainObject(decoded.settings)) {
+          return { found: true, value: {} };
+        }
+      } catch {
+      }
+    }
+    return { found: false, value: {} };
+  }
+  function syncActiveItemPayloadsToExtensionSettings(root, activeItemPayloads) {
+    var _a, _b, _c, _d, _e;
+    if (!root.Player) return;
+    const active = normalizeActiveItemPayloads(activeItemPayloads);
+    const currentRaw = (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY];
+    const backupRaw = (_c = root.localStorage) == null ? void 0 : _c.getItem(settingsBackupKey(root));
+    const decoded = decodeFirstAvailable(root, currentRaw, backupRaw);
+    const settings = isPlainObject(decoded) && isPlainObject(decoded.settings) ? decoded.settings : isPlainObject(decoded) ? decoded : {};
+    const document = Object.keys(active).length ? { v: 1, settings, activeItemPayloads: active } : { v: 1, settings };
+    const encoded = encodeExtensionSettingsRaw(root, document);
+    if (currentRaw === encoded && backupRaw === encoded) return;
+    (_d = root.Player).ExtensionSettings || (_d.ExtensionSettings = {});
+    root.Player.ExtensionSettings[SETTINGS_EXTENSION_KEY] = encoded;
+    (_e = root.localStorage) == null ? void 0 : _e.setItem(settingsBackupKey(root), encoded);
+    if (typeof root.ServerPlayerExtensionSettingsSync === "function") {
+      root.ServerPlayerExtensionSettingsSync(SETTINGS_EXTENSION_KEY);
+    }
+  }
+  function decodeFirstAvailable(root, ...rawValues) {
+    for (const raw of rawValues) {
+      try {
+        const decoded = decodeExtensionSettingsRaw(root, raw);
+        if (decoded) return decoded;
+      } catch {
+      }
+    }
+    return null;
+  }
+  function normalizeActiveItemPayloads(value) {
+    const out = {};
+    if (!isPlainObject(value)) return out;
+    for (const [key, raw] of Object.entries(value)) {
+      if (!isPlainObject(raw) || !isPlainObject(raw.payload)) continue;
+      const payload = raw.payload;
+      if (payload.v !== 1 || typeof payload.id !== "string" || !Array.isArray(payload.r)) continue;
+      const itemName = typeof raw.itemName === "string" ? raw.itemName.trim() : "";
+      if (!itemName) continue;
+      const originatorSource = normalizeOriginatorSource(raw.originatorSource);
+      out[key] = {
+        payload,
+        originatorMemberNumber: normalizeMemberNumber(raw.originatorMemberNumber),
+        originatorSource,
+        allowMinimalCreator: raw.allowMinimalCreator === true,
+        itemName,
+        updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0
+      };
+    }
+    return out;
+  }
+  function normalizeOriginatorSource(value) {
+    return value === "registry" || value === "cache" ? value : "unknown";
+  }
+  function normalizeMemberNumber(value) {
+    const memberNumber = Number(value);
+    return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
   }
   class RuleSynchronizer {
     constructor(root, bcx, reporter, settingsStore, itemRuleTransport) {
@@ -966,6 +1074,8 @@
         const player = this.root.Player;
         if (!player || !Array.isArray(player.Appearance)) return false;
         const settings = this.settingsStore.get();
+        const state = loadState(this.root);
+        const currentItemKeys = /* @__PURE__ */ new Set();
         const desiredInfo = settings.enabled ? collectDesiredRulesFromAppearance(player.Appearance, {
           scanItemCategoryOnly: settings.scanItemCategoryOnly,
           getLocalPayloadsForItem: (item) => {
@@ -973,33 +1083,75 @@
             const crafter = Number((_a = item == null ? void 0 : item.Craft) == null ? void 0 : _a.MemberNumber);
             const itemName = getItemRuleName(item);
             if (!itemName) return [];
-            if (Number.isFinite(crafter) && crafter > 0 && crafter === Number(player.MemberNumber)) {
+            const playerNumber = Number(player.MemberNumber);
+            const isLocalItem = Number.isFinite(crafter) && crafter > 0 && crafter === playerNumber;
+            const itemKey = this.makeActiveItemPayloadKey(isLocalItem ? playerNumber : crafter, itemName);
+            if (itemKey) currentItemKeys.add(itemKey);
+            const activePayload = itemKey ? state.activeItemPayloads[itemKey] : null;
+            if (activePayload) {
+              if (activePayload.originatorSource === "cache" && settings.allowForeignItemRules === false) {
+                if (itemKey) delete state.activeItemPayloads[itemKey];
+                return [];
+              }
+              return [{
+                payload: activePayload.payload,
+                originatorMemberNumber: activePayload.originatorMemberNumber,
+                originatorSource: activePayload.originatorSource,
+                allowMinimalCreator: activePayload.allowMinimalCreator,
+                itemName: activePayload.itemName
+              }];
+            }
+            if (isLocalItem) {
               const entry = findMatchingRegistryEntry(this.root, item);
-              return entry ? [{
+              if (!entry) return [];
+              if (itemKey) {
+                state.activeItemPayloads[itemKey] = {
+                  payload: deepClone(entry.payload),
+                  originatorMemberNumber: Number(player.MemberNumber),
+                  originatorSource: "registry",
+                  allowMinimalCreator: false,
+                  itemName,
+                  updatedAt: now()
+                };
+              }
+              return [{
                 payload: entry.payload,
                 originatorMemberNumber: Number(player.MemberNumber),
                 originatorSource: "registry",
                 allowMinimalCreator: false,
                 itemName
-              }] : [];
+              }];
             }
             if (Number.isFinite(crafter) && crafter > 0) {
               if (settings.allowForeignItemRules === false) return [];
-              if (settings.autoRequestForeignRules !== false && canRefreshRemoteItemRules(this.root, settings, crafter, itemName)) {
+              if (settings.autoRequestForeignRules !== false && itemKey && !state.activeItemPayloads[itemKey] && canRefreshRemoteItemRules(this.root, settings, crafter, itemName)) {
                 (_b = this.itemRuleTransport) == null ? void 0 : _b.requestItemRules(item);
               }
               const cached = getCachedItemRules(this.root, crafter, itemName);
-              return cached ? [{
+              if (!cached) return [];
+              if (itemKey) {
+                state.activeItemPayloads[itemKey] = {
+                  payload: deepClone(cached.payload),
+                  originatorMemberNumber: crafter,
+                  originatorSource: "cache",
+                  allowMinimalCreator: settings.allowCachedOfflineCreator,
+                  itemName,
+                  updatedAt: now()
+                };
+              }
+              return [{
                 payload: cached.payload,
                 originatorMemberNumber: crafter,
                 originatorSource: "cache",
                 allowMinimalCreator: settings.allowCachedOfflineCreator,
                 itemName
-              }] : [];
+              }];
             }
             return [];
           }
         }) : { desired: /* @__PURE__ */ new Map(), payloadIds: [], errors: [], conflicts: [] };
+        this.pruneActiveItemPayloads(state, currentItemKeys, settings);
+        saveState(this.root, state);
         if (!settings.enabled && settings.debugLogging) {
           console.info("[BCXIR] Runtime disabled; releasing managed rules.");
         }
@@ -1100,6 +1252,23 @@
       const memberNumber = Number((_a = this.root.Player) == null ? void 0 : _a.MemberNumber);
       return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
     }
+    makeActiveItemPayloadKey(crafter, itemName) {
+      const memberNumber = Number(crafter);
+      const normalizedItemName = normalizeItemName(itemName);
+      if (!Number.isFinite(memberNumber) || memberNumber <= 0 || !normalizedItemName) return null;
+      return makeRuleCacheKey(memberNumber, normalizedItemName);
+    }
+    pruneActiveItemPayloads(state, currentItemKeys, settings) {
+      for (const [itemKey, active] of Object.entries(state.activeItemPayloads)) {
+        if (!currentItemKeys.has(itemKey)) {
+          delete state.activeItemPayloads[itemKey];
+          continue;
+        }
+        if (active.originatorSource === "cache" && settings.allowForeignItemRules === false) {
+          delete state.activeItemPayloads[itemKey];
+        }
+      }
+    }
     errorMessage(error) {
       return String(error instanceof Error ? error.message : error);
     }
@@ -1167,13 +1336,6 @@
     const number = ((_a = root.Player) == null ? void 0 : _a.MemberNumber) == null ? "DEFAULT" : String(root.Player.MemberNumber);
     return SETTINGS_BACKUP_PREFIX + number + "_backup";
   }
-  function getLz(root) {
-    const lz = root.LZString || globalThis.LZString;
-    if (lz && typeof lz.compressToBase64 === "function" && typeof lz.decompressFromBase64 === "function") {
-      return lz;
-    }
-    return null;
-  }
   function normalizeSettings(value) {
     const source = isPlainObject(value) ? value : {};
     const dangerModeEnabled = source.dangerModeEnabled === true;
@@ -1200,19 +1362,29 @@
     };
   }
   function decodeSettings(root, raw) {
-    if (typeof raw !== "string" || !raw) return null;
-    const lz = getLz(root);
-    if (!lz) throw new Error("LZString base64 codec is unavailable");
-    const json = lz.decompressFromBase64(raw);
-    if (!json) throw new Error("settings decompression failed");
-    return normalizeSettings(JSON.parse(json));
+    const decoded = decodeExtensionSettingsRaw(root, raw);
+    if (!decoded) return null;
+    const settings = isPlainObject(decoded) && isPlainObject(decoded.settings) ? decoded.settings : decoded;
+    return normalizeSettings(settings);
   }
   function encodeSettings(root, settings) {
-    const lz = getLz(root);
-    if (!lz) throw new Error("LZString base64 codec is unavailable");
-    const encoded = lz.compressToBase64(JSON.stringify(normalizeSettings(settings)));
-    if (typeof encoded !== "string" || !encoded) throw new Error("settings compression failed");
-    return encoded;
+    const activeItemPayloads = readExistingActiveItemPayloads(root);
+    const document = activeItemPayloads ? { v: 1, settings: normalizeSettings(settings), activeItemPayloads } : { v: 1, settings: normalizeSettings(settings) };
+    return encodeExtensionSettingsRaw(root, document);
+  }
+  function readExistingActiveItemPayloads(root) {
+    var _a, _b, _c;
+    for (const raw of [
+      (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY],
+      (_c = root.localStorage) == null ? void 0 : _c.getItem(getSettingsBackupKey(root))
+    ]) {
+      try {
+        const decoded = decodeExtensionSettingsRaw(root, raw);
+        if (isPlainObject(decoded) && isPlainObject(decoded.activeItemPayloads)) return decoded.activeItemPayloads;
+      } catch {
+      }
+    }
+    return null;
   }
   class ExtensionSettingsStore {
     constructor(root) {
@@ -3896,6 +4068,7 @@
         return;
       }
       cacheItemRules(this.root, sender, pending.itemName, message.payload);
+      this.freezeFreshPayloadIfCurrentlyWorn(sender, pending.itemName, message.payload);
       this.pending.delete(message.requestId);
       this.cooldowns.delete(pending.cacheKey);
       this.debug("Item rule response cached.", { sender, requestId: message.requestId, itemName: pending.itemName });
@@ -3929,6 +4102,30 @@
         Craft: (item == null ? void 0 : item.Craft) ? deepClone(item.Craft) : void 0,
         Property: (item == null ? void 0 : item.Property) ? deepClone(item.Property) : void 0
       };
+    }
+    freezeFreshPayloadIfCurrentlyWorn(crafter, itemName, payload) {
+      var _a, _b;
+      const settings = (_a = this.settingsStore) == null ? void 0 : _a.get();
+      if ((settings == null ? void 0 : settings.allowForeignItemRules) === false) return;
+      const appearance = Array.isArray((_b = this.root.Player) == null ? void 0 : _b.Appearance) ? this.root.Player.Appearance : [];
+      const isWorn = appearance.some((item) => {
+        var _a2;
+        if (!isWearerItem(item, { scanItemCategoryOnly: settings == null ? void 0 : settings.scanItemCategoryOnly })) return false;
+        return this.normalizeMemberNumber((_a2 = item == null ? void 0 : item.Craft) == null ? void 0 : _a2.MemberNumber) === crafter && makeRuleCacheKey(crafter, getItemRuleName(item)) === makeRuleCacheKey(crafter, itemName);
+      });
+      if (!isWorn) return;
+      const state = loadState(this.root);
+      const itemKey = makeRuleCacheKey(crafter, itemName);
+      if (state.activeItemPayloads[itemKey]) return;
+      state.activeItemPayloads[itemKey] = {
+        payload: deepClone(payload),
+        originatorMemberNumber: crafter,
+        originatorSource: "cache",
+        allowMinimalCreator: (settings == null ? void 0 : settings.allowCachedOfflineCreator) !== false,
+        itemName,
+        updatedAt: now()
+      };
+      saveState(this.root, state);
     }
     toEnvelope(target, message) {
       const args = [
