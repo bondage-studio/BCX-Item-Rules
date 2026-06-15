@@ -1,0 +1,38 @@
+# Copy to: .github/workflows/notify-site.yml in the SOURCE repo.
+# Rebuilds bondage-studio.github.io whenever this repo's site/ docs change.
+#
+# Auth is handled by a GitHub App (recommended over a personal PAT): short-lived
+# tokens, least privilege, not tied to anyone's account. The org needs, once:
+#   - a GitHub App with "Contents: Read and write", installed on the org with
+#     access to the bondage-studio.github.io repo
+#   - Variable SITE_DISPATCH_APP_ID        = the App's App ID
+#   - Secret   SITE_DISPATCH_APP_PRIVATE_KEY = the App's .pem private key
+# Store both at the org level so every source repo can reuse them.
+name: Notify site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint installation token from the GitHub App
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.SITE_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.SITE_DISPATCH_APP_PRIVATE_KEY }}
+          owner: bondage-studio
+          repositories: bondage-studio.github.io # scope the token to the target only
+
+      - name: Trigger site rebuild
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repository: bondage-studio/bondage-studio.github.io
+          event-type: sync-docs

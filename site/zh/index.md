@@ -1,0 +1,75 @@
+---
+title: BCX Item Rules
+description: 一个独立的 Bondage Club 用户脚本，把本地注册的制作道具名称关联到 BCX 规则。
+order: 10
+---
+
+**BCX Item Rules**（简称 BCXIR）是一个独立的 [Bondage Club](https://www.bondageprojects.com/)
+用户脚本。它把**本地注册的制作道具名称**与 **BCX 规则**关联起来：当玩家穿戴匹配的制作道具时，
+BCXIR 会通过 BCX 把已注册的规则 payload 应用到本地玩家身上 —— 并且永远不会写入 BCX 的内部存档
+（`Player.ExtensionSettings.BCX`）。
+
+## 亮点
+
+- **🔗 本地道具注册表** —— 在本地注册制作道具名称，并为其附加 BCX 规则。不会写入
+  `Craft.Description`，也不会写入 BCX 自身的存档。见[创建道具规则](/zh/bcxir/creating-rules)。
+- **📤 分享给穿戴者** —— 其他玩家的游戏会通过类似 LSCG 的私密 beep 按需向你请求规则 payload，
+  并在本地缓存结果。见[分享与权限](/zh/bcxir/sharing)。
+- **🛡️ 保守且安全** —— 规则只应用到本地穿戴者，绝不覆盖你已有的 BCX 规则；道具移除后会干净地
+  恢复或删除。见[工作原理](/zh/bcxir/how-it-works)。
+
+## 一分钟安装
+
+1. 安装 [Tampermonkey](https://www.tampermonkey.net/)。
+2. 确保已安装 **BCX**，并且游戏中存在 `window.bcx`。
+3. 使用具备自动更新能力的规范地址安装 loader：
+
+   ```text
+   https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js
+   ```
+
+完整说明见[安装指南](/zh/bcxir/getting-started)，或直接[创建你的第一条道具规则](/zh/bcxir/quick-start)。
+
+## 下载
+
+| 文件 | 用途 |
+| --- | --- |
+| [BCXItemRules.loader.user.js](https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js) | 你需要安装的 loader。体积小，会自动更新运行脚本。 |
+| [BCXItemRules.user.js](https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.user.js) | 兼容旧安装链接的 loader 别名。 |
+| [BCXItemRules.script.js](https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.script.js) | loader 在线拉取的运行脚本。 |
+
+## 为什么需要 BCXIR
+
+Bondage Club 的制作道具带有名称、制作者编号和描述。BCX 规则非常强大，但它们保存在每个玩家自己的
+BCX 配置里，并不附着在道具上。
+
+BCXIR 把两者连接起来：制作者把一组 BCX 规则附加到自己拥有的**制作道具名称**上。当有人穿戴该道具时，
+对方的游戏可以在本地拉取并应用这些规则 —— 这样道具就能“携带”行为，而无需把规则数据塞进道具描述里。
+
+## 核心概念
+
+| 概念 | 说明 |
+| --- | --- |
+| **注册表 Registry** | 你本地的制作道具名称列表，每一项附带一个 BCX 规则 payload。按成员编号保存在 `localStorage` 中。 |
+| **编辑 Authoring** | 你通过一个**临时虚拟 BCX 角色**、使用真实的 BCX 规则界面来编辑道具规则 —— 但结果保存到 BCXIR 的注册表，而非你自己的 BCX。 |
+| **分享 Sharing** | 当其他人穿戴你的道具时，对方的游戏会通过私密的 BCX 风格 beep 向你请求 payload，并在本地缓存。 |
+| **权限模式** | 控制规则在本地以**谁的身份**被应用：道具制作者，或你自己。 |
+| **应用 / 恢复** | 穿上匹配道具时应用规则；脱下时恢复或删除规则 —— 同时不触碰你未被管理的规则。 |
+
+## BCXIR **不会**做的事
+
+- **不会**写入 `Player.ExtensionSettings.BCX`。
+- **不会**把规则 payload 存进 `Craft.Description`（旧的 `[BCXIR:v1:...]` 标记已不再支持）。
+- **不会**覆盖你已有的、非 BCXIR 管理的 BCX 规则。
+- **不会**把临时的编辑 / 操作者角色同步到服务器。
+
+## 前置条件
+
+- 一个用户脚本管理器 —— 推荐 **[Tampermonkey](https://www.tampermonkey.net/)**。
+- 已安装 **BCX**，并且游戏中存在 `window.bcx`。
+
+## 下一步
+
+- [安装 BCXIR](/zh/bcxir/getting-started)
+- [快速上手：创建并穿戴你的第一条规则](/zh/bcxir/quick-start)
+- [创建道具规则](/zh/bcxir/creating-rules)
