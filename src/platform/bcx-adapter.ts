@@ -7,7 +7,8 @@ import type { BCXQueryQueue, BCXQueryQueueDiagnostics } from "./bcx-query-queue"
 export type RuleQueryContext =
   | { kind: "self" }
   | ({ kind: "creator" } & CreatorSenderContext)
-  | { kind: "useMe" };
+  | { kind: "useMe" }
+  | { kind: "target"; memberNumber: number };
 
 export class BCXAdapter {
   private bcxApi: any = null;
@@ -53,6 +54,13 @@ export class BCXAdapter {
       if (!this.useMeTransport) throw new Error("Please-use-me transport is unavailable");
       return this.useMeTransport.queryUseMe(type, data, QUERY_TIMEOUT_MS);
     }
+    if (context.kind === "target") {
+      const api = this.getApi();
+      if (!api || typeof api.sendQuery !== "function") {
+        throw new Error("BCX API is unavailable");
+      }
+      return api.sendQuery(type, data, context.memberNumber, QUERY_TIMEOUT_MS);
+    }
     const api = this.getApi();
     if (!api || typeof api.sendQuery !== "function") {
       throw new Error("BCX API is unavailable");
@@ -63,6 +71,7 @@ export class BCXAdapter {
   private makeQueryLabel(type: string, context: RuleQueryContext): string {
     if (context.kind === "creator") return "creator:" + context.memberNumber + ":" + type;
     if (context.kind === "useMe") return "useMe:" + type;
+    if (context.kind === "target") return "target:" + context.memberNumber + ":" + type;
     return "self:" + type;
   }
 

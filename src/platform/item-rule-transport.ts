@@ -2,6 +2,8 @@ import {
   ITEM_RULE_BEEP_TYPE,
   ITEM_RULE_MESSAGE_FLAG,
   ITEM_RULE_PROTOCOL_VERSION,
+  ITEM_RULE_PRESENCE_PING_COMMAND,
+  ITEM_RULE_PRESENCE_PONG_COMMAND,
   ITEM_RULE_REQUEST_COMMAND,
   ITEM_RULE_REQUEST_COOLDOWN_MS,
   ITEM_RULE_REQUEST_MAX_COOLDOWN_MS,
@@ -25,13 +27,17 @@ import { deepClone, isPlainObject, now } from "../shared/utils";
 import { Reporter } from "./reporter";
 import type { SettingsStore } from "../settings/settings-storage";
 
-type ItemRuleCommand = typeof ITEM_RULE_REQUEST_COMMAND | typeof ITEM_RULE_RESPONSE_COMMAND;
+type ItemRuleCommand =
+  | typeof ITEM_RULE_REQUEST_COMMAND
+  | typeof ITEM_RULE_RESPONSE_COMMAND
+  | typeof ITEM_RULE_PRESENCE_PING_COMMAND
+  | typeof ITEM_RULE_PRESENCE_PONG_COMMAND;
 
 interface ItemRuleMessage {
   v: 1;
   command: ItemRuleCommand;
   requestId: string;
-  itemName: string;
+  itemName?: string;
   item?: any;
   payload?: NormalizedPayload;
 }
@@ -66,10 +72,15 @@ interface RequestCooldown {
   lastSentAt: number;
 }
 
+const PRESENCE_NEGATIVE_CACHE_MS = 60_000;
+
 export class ItemRuleTransport {
   private installed = false;
   private pending = new Map<string, PendingRequest>();
   private cooldowns = new Map<string, RequestCooldown>();
+  private presenceCache = new Map<number, number>();
+  private presenceNegativeCache = new Map<number, number>();
+  private pendingPresence = new Map<string, { target: number; resolve: (value: boolean) => void; timer: number }>();
   private onRulesReceived: (() => void) | null = null;
   private lastInboundType: string | null = null;
   private lastOutboundType: string | null = null;
@@ -167,6 +178,36 @@ export class ItemRuleTransport {
     return requestId;
   }
 
+  async hasBCXIRPeer(target: number, timeoutMs = 800): Promise<boolean> {
+    const memberNumber = this.normalizeMemberNumber(target);
+    if (memberNumber == null) return false;
+    const cachedUntil = this.presenceCache.get(memberNumber) || 0;
+    if (cachedUntil > now()) return true;
+    const negativeCachedUntil = this.presenceNegativeCache.get(memberNumber) || 0;
+    if (negativeCachedUntil > now()) return false;
+
+    const requestId = this.makePresenceRequestId(memberNumber);
+    return new Promise((resolve) => {
+      const timer = this.root.setTimeout(() => {
+        this.pendingPresence.delete(requestId);
+        this.presenceNegativeCache.set(memberNumber, now() + PRESENCE_NEGATIVE_CACHE_MS);
+        resolve(false);
+      }, timeoutMs);
+      this.pendingPresence.set(requestId, { target: memberNumber, resolve, timer });
+      const sent = this.sendBeep(memberNumber, {
+        v: ITEM_RULE_PROTOCOL_VERSION,
+        command: ITEM_RULE_PRESENCE_PING_COMMAND,
+        requestId,
+      });
+      if (!sent) {
+        this.root.clearTimeout(timer);
+        this.pendingPresence.delete(requestId);
+        this.presenceNegativeCache.set(memberNumber, now() + PRESENCE_NEGATIVE_CACHE_MS);
+        resolve(false);
+      }
+    });
+  }
+
   getPendingCount(): number {
     this.expirePending();
     return this.pending.size;
@@ -202,6 +243,20 @@ export class ItemRuleTransport {
       this.handleResponse(sender, message);
       return true;
     }
+    if (message.command === ITEM_RULE_PRESENCE_PING_COMMAND) {
+      this.lastInboundType = ITEM_RULE_PRESENCE_PING_COMMAND;
+      this.sendBeep(sender, {
+        v: ITEM_RULE_PROTOCOL_VERSION,
+        command: ITEM_RULE_PRESENCE_PONG_COMMAND,
+        requestId: message.requestId,
+      });
+      return true;
+    }
+    if (message.command === ITEM_RULE_PRESENCE_PONG_COMMAND) {
+      this.lastInboundType = ITEM_RULE_PRESENCE_PONG_COMMAND;
+      this.handlePresencePong(sender, message.requestId);
+      return true;
+    }
     return true;
   }
 
@@ -213,16 +268,22 @@ export class ItemRuleTransport {
     const commandData = envelope.command;
     if (!isPlainObject(commandData)) return null;
     const command = commandData.name;
-    if (command !== ITEM_RULE_REQUEST_COMMAND && command !== ITEM_RULE_RESPONSE_COMMAND) return null;
+    if (
+      command !== ITEM_RULE_REQUEST_COMMAND &&
+      command !== ITEM_RULE_RESPONSE_COMMAND &&
+      command !== ITEM_RULE_PRESENCE_PING_COMMAND &&
+      command !== ITEM_RULE_PRESENCE_PONG_COMMAND
+    ) return null;
     const args = Array.isArray(commandData.args) ? commandData.args : [];
     const requestId = this.getArg(args, "requestId", "string");
     const itemName = this.getArg(args, "itemName", "string");
-    if (!requestId || !itemName) return null;
+    if (!requestId) return null;
+    if ((command === ITEM_RULE_REQUEST_COMMAND || command === ITEM_RULE_RESPONSE_COMMAND) && !itemName) return null;
     const message: ItemRuleMessage = {
       v: ITEM_RULE_PROTOCOL_VERSION,
       command,
       requestId,
-      itemName,
+      ...(itemName ? { itemName } : {}),
       item: this.getArg(args, "item"),
     };
     const payload = this.getArg(args, "payload");
@@ -245,7 +306,7 @@ export class ItemRuleTransport {
     }
     const itemText = message.item
       ? getItemNameAndDescriptionConcat(this.root, message.item)
-      : message.itemName;
+      : message.itemName || "";
     const entry = findMatchingRegistryEntry(this.root, itemText);
     this.debug("Item rule request received.", { sender, requestId: message.requestId, itemName: message.itemName, matched: !!entry });
     if (!entry) return;
@@ -264,6 +325,7 @@ export class ItemRuleTransport {
 
   private handleResponse(sender: number, message: ItemRuleMessage): void {
     this.expirePending();
+    const responseItemName = message.itemName || "";
     const pending = this.pending.get(message.requestId);
     if (!pending) {
       this.debug("Item rule response ignored; no pending request.", { sender, requestId: message.requestId });
@@ -291,11 +353,11 @@ export class ItemRuleTransport {
       });
       return;
     }
-    if (!isPhraseInItemName(pending.itemName, message.itemName) && !isPhraseInItemName(message.itemName, pending.itemName)) {
+    if (!isPhraseInItemName(pending.itemName, responseItemName) && !isPhraseInItemName(responseItemName, pending.itemName)) {
       this.debug("Item rule response ignored; item name mismatch.", {
         requestId: message.requestId,
         pendingItemName: pending.itemName,
-        responseItemName: message.itemName,
+        responseItemName,
       });
       return;
     }
@@ -308,6 +370,16 @@ export class ItemRuleTransport {
       this.reporter.localMessage("Received BCXIR rules for " + pending.itemName + ".", "info");
     }
     this.onRulesReceived?.();
+  }
+
+  private handlePresencePong(sender: number, requestId: string): void {
+    const pending = this.pendingPresence.get(requestId);
+    if (!pending || pending.target !== sender) return;
+    this.root.clearTimeout(pending.timer);
+    this.pendingPresence.delete(requestId);
+    this.presenceCache.set(sender, now() + 60000);
+    this.presenceNegativeCache.delete(sender);
+    pending.resolve(true);
   }
 
   private sendBeep(target: number, message: ItemRuleMessage): boolean {
@@ -364,8 +436,8 @@ export class ItemRuleTransport {
   private toEnvelope(target: number, message: ItemRuleMessage): BCXIRCommandEnvelope {
     const args: CommandArg[] = [
       { name: "requestId", value: message.requestId },
-      { name: "itemName", value: message.itemName },
     ];
+    if (message.itemName !== undefined) args.push({ name: "itemName", value: message.itemName });
     if (message.item !== undefined) args.push({ name: "item", value: deepClone(message.item) });
     if (message.payload !== undefined) args.push({ name: "payload", value: deepClone(message.payload) });
     return {
@@ -402,6 +474,16 @@ export class ItemRuleTransport {
       String(this.root.Player?.MemberNumber || 0),
       String(crafter),
       itemName.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40),
+      String(Date.now()),
+      String(Math.floor(Math.random() * 100000)),
+    ].join(":");
+  }
+
+  private makePresenceRequestId(target: number): string {
+    return [
+      "bcxir-presence",
+      String(this.root.Player?.MemberNumber || 0),
+      String(target),
       String(Date.now()),
       String(Math.floor(Math.random() * 100000)),
     ].join(":");

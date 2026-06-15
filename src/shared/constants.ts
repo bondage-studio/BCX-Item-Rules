@@ -18,6 +18,8 @@ export const ITEM_RULE_BEEP_TYPE = "Leash";
 export const ITEM_RULE_MESSAGE_FLAG = "IsBCXIR";
 export const ITEM_RULE_REQUEST_COMMAND = "bcxir-item-rules-request";
 export const ITEM_RULE_RESPONSE_COMMAND = "bcxir-item-rules-response";
+export const ITEM_RULE_PRESENCE_PING_COMMAND = "bcxir-presence-ping";
+export const ITEM_RULE_PRESENCE_PONG_COMMAND = "bcxir-presence-pong";
 
 export const MATCH_HOSTS = [
   "https://bondageprojects.elementfx.com/*",

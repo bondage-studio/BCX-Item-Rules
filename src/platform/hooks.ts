@@ -29,7 +29,7 @@ export function registerModSdkHooks(
         modApi.hookFunction(fnName, 1, (args: any[], next: (args: any[]) => unknown) => {
           const result = next(args);
           const C = characterIndex == null ? root.Player : args[characterIndex];
-          if (!C || C === root.Player || (typeof C.IsPlayer === "function" && C.IsPlayer())) {
+          if (!C || C === root.Player || Array.isArray(C.Appearance) || (typeof C.IsPlayer === "function" && C.IsPlayer())) {
             synchronizer.scheduleSync(reason);
           }
           return result;

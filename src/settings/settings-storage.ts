@@ -22,6 +22,8 @@ export const DEFAULT_SETTINGS: BCXIRSettings = {
   allowForeignItemRules: true,
   respondToRuleRequests: true,
   autoRequestForeignRules: true,
+  applyMyRulesToNonPluginUsers: false,
+  removeMyRulesFromNonPluginUsers: false,
   showTransportMessages: true,
 };
 
@@ -63,6 +65,8 @@ export function normalizeSettings(value: unknown): BCXIRSettings {
     allowForeignItemRules: source.allowForeignItemRules !== false,
     respondToRuleRequests: source.respondToRuleRequests !== false,
     autoRequestForeignRules: source.autoRequestForeignRules !== false,
+    applyMyRulesToNonPluginUsers: source.applyMyRulesToNonPluginUsers === true,
+    removeMyRulesFromNonPluginUsers: source.removeMyRulesFromNonPluginUsers === true,
     showTransportMessages: source.showTransportMessages !== false,
   };
 }

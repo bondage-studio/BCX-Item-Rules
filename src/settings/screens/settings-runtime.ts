@@ -23,6 +23,8 @@ const ROWS = {
   foreign: 2,
   respond: 3,
   request: 4,
+  nonPluginApply: 5,
+  nonPluginRemove: 6,
   back: 7,
 } as const;
 
@@ -97,6 +99,8 @@ export class SettingsRuntimeScreen extends SettingsScreen {
     this.drawLeftCheckbox(ROWS.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
     this.drawLeftCheckbox(ROWS.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
     this.drawLeftCheckbox(ROWS.request, this.t("runtime.request"), this.t("runtime.request.tip"), settings.autoRequestForeignRules, settings.allowForeignItemRules === false);
+    this.drawLeftCheckbox(ROWS.nonPluginApply, this.t("runtime.nonPluginApply"), this.t("runtime.nonPluginApply.tip"), settings.applyMyRulesToNonPluginUsers);
+    this.drawLeftCheckbox(ROWS.nonPluginRemove, this.t("runtime.nonPluginRemove"), this.t("runtime.nonPluginRemove.tip"), settings.removeMyRulesFromNonPluginUsers);
 
     if (currentCache) {
       this.drawCacheSelector(currentCache.itemName);
@@ -125,6 +129,8 @@ export class SettingsRuntimeScreen extends SettingsScreen {
     if (this.leftCheckboxClicked(ROWS.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
     if (this.leftCheckboxClicked(ROWS.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
     if (settings.allowForeignItemRules !== false && this.leftCheckboxClicked(ROWS.request)) this.update({ autoRequestForeignRules: !settings.autoRequestForeignRules });
+    if (this.leftCheckboxClicked(ROWS.nonPluginApply)) this.update({ applyMyRulesToNonPluginUsers: !settings.applyMyRulesToNonPluginUsers });
+    if (this.leftCheckboxClicked(ROWS.nonPluginRemove)) this.update({ removeMyRulesFromNonPluginUsers: !settings.removeMyRulesFromNonPluginUsers });
 
     if (currentCache && this.mouseIn(RIGHT_X, this.rowY(RIGHT_CACHE_ROW) - 32, RIGHT_SELECTOR_W, 64)) {
       this.cacheIndex = this.getNewIndexFromNextPrevClick(this.cacheIndex, cacheEntries.length);

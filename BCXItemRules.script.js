@@ -43,6 +43,8 @@
   const ITEM_RULE_MESSAGE_FLAG = "IsBCXIR";
   const ITEM_RULE_REQUEST_COMMAND = "bcxir-item-rules-request";
   const ITEM_RULE_RESPONSE_COMMAND = "bcxir-item-rules-response";
+  const ITEM_RULE_PRESENCE_PING_COMMAND = "bcxir-presence-ping";
+  const ITEM_RULE_PRESENCE_PONG_COMMAND = "bcxir-presence-pong";
   class BCXAdapter {
     constructor(root, creatorSenderTransport, useMeTransport, queryQueue) {
       __publicField(this, "bcxApi", null);
@@ -82,6 +84,13 @@
         if (!this.useMeTransport) throw new Error("Please-use-me transport is unavailable");
         return this.useMeTransport.queryUseMe(type, data, QUERY_TIMEOUT_MS);
       }
+      if (context.kind === "target") {
+        const api2 = this.getApi();
+        if (!api2 || typeof api2.sendQuery !== "function") {
+          throw new Error("BCX API is unavailable");
+        }
+        return api2.sendQuery(type, data, context.memberNumber, QUERY_TIMEOUT_MS);
+      }
       const api = this.getApi();
       if (!api || typeof api.sendQuery !== "function") {
         throw new Error("BCX API is unavailable");
@@ -91,6 +100,7 @@
     makeQueryLabel(type, context) {
       if (context.kind === "creator") return "creator:" + context.memberNumber + ":" + type;
       if (context.kind === "useMe") return "useMe:" + type;
+      if (context.kind === "target") return "target:" + context.memberNumber + ":" + type;
       return "self:" + type;
     }
     isKnownRule(ruleId) {
@@ -613,7 +623,14 @@
     return SETTINGS_BACKUP_PREFIX + getPlayerNumber(root) + "_backup";
   }
   function emptyState() {
-    return { version: 1, activePayloadIds: [], activeItemPayloads: {}, managed: {} };
+    return {
+      version: 1,
+      activePayloadIds: [],
+      activeItemPayloads: {},
+      managed: {},
+      targetAppearances: {},
+      targetManaged: {}
+    };
   }
   function loadState(root) {
     try {
@@ -631,7 +648,9 @@
         version: 1,
         activePayloadIds: Array.isArray(parsed.activePayloadIds) ? parsed.activePayloadIds : [],
         activeItemPayloads: extensionActiveItemPayloads.found ? extensionActiveItemPayloads.value : normalizeActiveItemPayloads(parsed.activeItemPayloads),
-        managed: parsed.managed && typeof parsed.managed === "object" ? parsed.managed : {}
+        managed: parsed.managed && typeof parsed.managed === "object" ? parsed.managed : {},
+        targetAppearances: normalizeTargetAppearances(parsed.targetAppearances),
+        targetManaged: normalizeTargetManaged(parsed.targetManaged)
       };
     } catch (error) {
       console.warn("[BCXIR] Failed to load local state; starting clean.", error);
@@ -720,6 +739,46 @@
   function normalizeMemberNumber$1(value) {
     const memberNumber = Number(value);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+  }
+  function normalizeTargetAppearances(value) {
+    const out = {};
+    if (!isPlainObject(value)) return out;
+    for (const [key, raw] of Object.entries(value)) {
+      if (!isPlainObject(raw)) continue;
+      const memberNumber = normalizeMemberNumber$1(raw.memberNumber);
+      const desiredHash = typeof raw.desiredHash === "string" ? raw.desiredHash : "";
+      if (memberNumber == null || !desiredHash) continue;
+      out[key] = {
+        memberNumber,
+        desiredHash,
+        itemKeys: normalizeStringArray(raw.itemKeys),
+        updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0
+      };
+    }
+    return out;
+  }
+  function normalizeTargetManaged(value) {
+    const out = {};
+    if (!isPlainObject(value)) return out;
+    for (const [key, raw] of Object.entries(value)) {
+      if (!isPlainObject(raw) || !isPlainObject(raw.lastApplied)) continue;
+      const targetMemberNumber = normalizeMemberNumber$1(raw.targetMemberNumber);
+      const ruleId = typeof raw.ruleId === "string" ? raw.ruleId.trim() : "";
+      if (targetMemberNumber == null || !ruleId) continue;
+      out[key] = {
+        targetMemberNumber,
+        ruleId,
+        lastApplied: raw.lastApplied,
+        payloadIds: normalizeStringArray(raw.payloadIds),
+        itemKeys: normalizeStringArray(raw.itemKeys),
+        updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0
+      };
+    }
+    return out;
+  }
+  function normalizeStringArray(value) {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value.map((entry) => String(entry || "").trim()).filter(Boolean))).sort();
   }
   const LOCKED_SETTING_KEYS = /* @__PURE__ */ new Set([
     "rulePermissionMode",
@@ -995,7 +1054,7 @@
               updatedAt: now(),
               appliedSenderMemberNumber: applyContext.senderMemberNumber,
               appliedSenderWasMinimal: applyContext.allowMinimalCreator,
-              appliedContextKind: applyContext.context.kind,
+              appliedContextKind: this.managedContextKind(applyContext.context),
               suspendedExistingInactive: true
             };
           }
@@ -1013,7 +1072,7 @@
               updatedAt: now(),
               appliedSenderMemberNumber: applyContext.senderMemberNumber,
               appliedSenderWasMinimal: applyContext.allowMinimalCreator,
-              appliedContextKind: applyContext.context.kind
+              appliedContextKind: this.managedContextKind(applyContext.context)
             };
           }
           updateCandidates.push({ ruleId, desired, wasManaged });
@@ -1050,7 +1109,7 @@
           state.managed[ruleId].updatedAt = now();
           state.managed[ruleId].appliedSenderMemberNumber = applyContext.senderMemberNumber;
           state.managed[ruleId].appliedSenderWasMinimal = applyContext.allowMinimalCreator;
-          state.managed[ruleId].appliedContextKind = applyContext.context.kind;
+          state.managed[ruleId].appliedContextKind = this.managedContextKind(applyContext.context);
           changedMessages.push("Applied " + ruleId);
         }
       }
@@ -1219,7 +1278,11 @@
         if (!settings.enabled && settings.debugLogging) {
           console.info("[BCXIR] Runtime disabled; releasing managed rules.");
         }
-        return await this.applyDesiredRules(desiredInfo, reason || "manual");
+        const applied = await this.applyDesiredRules(desiredInfo, reason || "manual");
+        if (settings.enabled && (settings.applyMyRulesToNonPluginUsers || settings.removeMyRulesFromNonPluginUsers)) {
+          await this.syncNonPluginTargets(settings, reason || "manual");
+        }
+        return applied;
       } catch (error) {
         console.error("[BCXIR] Sync failed.", error);
         this.reporter.reportOnce("sync", [
@@ -1268,6 +1331,231 @@
         pendingSyncReason: this.pendingSyncReason
       };
     }
+    async syncNonPluginTargets(settings, reason) {
+      var _a;
+      if (!this.itemRuleTransport) return;
+      const playerNumber = this.getPlayerMemberNumber();
+      if (playerNumber == null) return;
+      const targets = this.getRoomTargets(playerNumber);
+      const state = loadState(this.root);
+      const seenTargets = /* @__PURE__ */ new Set();
+      let stateChanged = false;
+      for (const target of targets) {
+        const memberNumber = this.getCharacterMemberNumber(target);
+        if (memberNumber == null || !this.targetHasBCX(memberNumber)) continue;
+        if (await this.itemRuleTransport.hasBCXIRPeer(memberNumber)) continue;
+        const desiredInfo = this.collectTargetDesiredRules(target, playerNumber, settings);
+        const targetKey = String(memberNumber);
+        const desiredHash = this.makeTargetDesiredHash(desiredInfo, settings);
+        const itemKeys = this.getDesiredItemKeys(desiredInfo);
+        const managedRules = this.getTargetManagedRules(state, memberNumber);
+        const hasStaleManagedRules = managedRules.some((managed) => !desiredInfo.desired.has(managed.ruleId));
+        seenTargets.add(targetKey);
+        if (((_a = state.targetAppearances[targetKey]) == null ? void 0 : _a.desiredHash) === desiredHash && !hasStaleManagedRules) {
+          continue;
+        }
+        const processed = await this.syncTargetRules(memberNumber, desiredInfo, settings, state);
+        if (processed) {
+          state.targetAppearances[targetKey] = {
+            memberNumber,
+            desiredHash,
+            itemKeys,
+            updatedAt: now()
+          };
+          stateChanged = true;
+        }
+      }
+      if (this.pruneTargetAppearanceState(state, seenTargets)) stateChanged = true;
+      if (stateChanged) saveState(this.root, state);
+      if (settings.debugLogging) console.info("[BCXIR]", reason, "non-plugin target sync complete");
+    }
+    getRoomTargets(playerNumber) {
+      const characters = Array.isArray(this.root.ChatRoomCharacter) ? this.root.ChatRoomCharacter : [];
+      return characters.filter((character) => {
+        const memberNumber = this.getCharacterMemberNumber(character);
+        if (memberNumber == null || memberNumber === playerNumber) return false;
+        if (character === this.root.Player) return false;
+        if (typeof character.IsPlayer === "function" && character.IsPlayer()) return false;
+        return Array.isArray(character.Appearance);
+      });
+    }
+    targetHasBCX(memberNumber) {
+      var _a;
+      const getVersion = (_a = this.root.bcx) == null ? void 0 : _a.getCharacterVersion;
+      if (typeof getVersion !== "function") return false;
+      try {
+        return !!getVersion.call(this.root.bcx, memberNumber);
+      } catch {
+        return false;
+      }
+    }
+    collectTargetDesiredRules(target, playerNumber, settings) {
+      return collectDesiredRulesFromAppearance(Array.isArray(target.Appearance) ? target.Appearance : [], {
+        scanItemCategoryOnly: settings.scanItemCategoryOnly,
+        getLocalPayloadsForItem: (item) => {
+          var _a;
+          if (Number((_a = item == null ? void 0 : item.Craft) == null ? void 0 : _a.MemberNumber) !== playerNumber) return [];
+          const itemName = getItemRuleName(item);
+          if (!itemName) return [];
+          const entry = findMatchingRegistryEntry(this.root, item, playerNumber);
+          if (!entry || entry.selfOnly) return [];
+          return [{
+            payload: entry.payload,
+            originatorMemberNumber: playerNumber,
+            originatorSource: "registry",
+            allowMinimalCreator: false,
+            itemName
+          }];
+        }
+      });
+    }
+    async syncTargetRules(memberNumber, desiredInfo, settings, state) {
+      const context = { kind: "target", memberNumber };
+      const managedRules = this.getTargetManagedRules(state, memberNumber);
+      const cleanupRules = settings.removeMyRulesFromNonPluginUsers ? managedRules.filter((managed) => !desiredInfo.desired.has(managed.ruleId)) : [];
+      const needsApply = settings.applyMyRulesToNonPluginUsers && desiredInfo.desired.size > 0;
+      if (!needsApply && !cleanupRules.length) return true;
+      let conditionsData;
+      try {
+        conditionsData = await this.bcx.fetchRuleConditions(context);
+      } catch (error) {
+        this.debugTarget("Failed to read target rules.", memberNumber, error);
+        return false;
+      }
+      if (needsApply) {
+        await this.applyDesiredRulesToTarget(memberNumber, desiredInfo, conditionsData, context, state);
+      }
+      if (cleanupRules.length) {
+        await this.cleanupManagedRulesFromTarget(memberNumber, cleanupRules, desiredInfo, conditionsData, context, state);
+      }
+      return true;
+    }
+    async applyDesiredRulesToTarget(memberNumber, desiredInfo, conditionsData, context, state) {
+      for (const [ruleId, desired] of desiredInfo.desired.entries()) {
+        if (!this.bcx.isKnownRule(ruleId)) continue;
+        const managedKey = this.makeTargetManagedRuleKey(memberNumber, ruleId);
+        const managed = state.targetManaged[managedKey];
+        const current = this.bcx.getRulePublicData(conditionsData, ruleId);
+        const comparableCurrent = normalizeConditionForUpdate(current);
+        let createdByThisSync = false;
+        if (current) {
+          if (!managed) {
+            this.debugTarget("Target rule exists; not overwriting.", memberNumber, ruleId);
+            continue;
+          }
+          if (!comparableCurrent || !sameStable(comparableCurrent, managed.lastApplied)) {
+            delete state.targetManaged[managedKey];
+            this.debugTarget("Target managed rule changed externally; released.", memberNumber, ruleId);
+            continue;
+          }
+        } else {
+          const created = await this.bcx.ensureRuleExists(ruleId, conditionsData, context).catch((error) => {
+            this.debugTarget("Target rule create failed.", memberNumber, error);
+            return false;
+          });
+          if (created !== true) continue;
+          createdByThisSync = true;
+        }
+        const updateData = makeRuleUpdateData(desired.conditionData, current);
+        const updated = await this.bcx.updateRule(ruleId, updateData, context).catch((error) => {
+          this.debugTarget("Target rule update failed.", memberNumber, error);
+          return false;
+        });
+        if (updated !== true) {
+          if (createdByThisSync) await this.bcx.deleteRule(ruleId, context).catch(() => false);
+          continue;
+        }
+        state.targetManaged[managedKey] = {
+          targetMemberNumber: memberNumber,
+          ruleId,
+          lastApplied: deepClone(updateData),
+          payloadIds: Array.from(new Set(desired.payloadIds)).sort(),
+          itemKeys: this.getDesiredItemKeysForRule(desired),
+          updatedAt: now()
+        };
+        if ((conditionsData == null ? void 0 : conditionsData.conditions) && typeof conditionsData.conditions === "object") {
+          conditionsData.conditions[ruleId] = deepClone(updateData);
+        }
+      }
+    }
+    async cleanupManagedRulesFromTarget(memberNumber, managedRules, desiredInfo, conditionsData, context, state) {
+      for (const managed of managedRules) {
+        if (desiredInfo.desired.has(managed.ruleId)) continue;
+        const managedKey = this.makeTargetManagedRuleKey(memberNumber, managed.ruleId);
+        const current = this.bcx.getRulePublicData(conditionsData, managed.ruleId);
+        if (!current) {
+          delete state.targetManaged[managedKey];
+          continue;
+        }
+        const comparableCurrent = normalizeConditionForUpdate(current);
+        if (!comparableCurrent || !sameStable(comparableCurrent, managed.lastApplied)) {
+          delete state.targetManaged[managedKey];
+          this.debugTarget("Target managed rule changed before cleanup; released.", memberNumber, managed.ruleId);
+          continue;
+        }
+        const deleted = await this.bcx.deleteRule(managed.ruleId, context).catch((error) => {
+          this.debugTarget("Target rule delete failed.", memberNumber, error);
+          return false;
+        });
+        if (deleted === true) delete state.targetManaged[managedKey];
+      }
+    }
+    getTargetManagedRules(state, memberNumber) {
+      return Object.values(state.targetManaged).filter((managed) => managed.targetMemberNumber === memberNumber);
+    }
+    makeTargetManagedRuleKey(memberNumber, ruleId) {
+      return String(memberNumber) + ":" + ruleId;
+    }
+    makeTargetDesiredHash(desiredInfo, settings) {
+      return stableStringify({
+        apply: settings.applyMyRulesToNonPluginUsers === true,
+        remove: settings.removeMyRulesFromNonPluginUsers === true,
+        errors: desiredInfo.errors,
+        conflicts: desiredInfo.conflicts,
+        rules: Array.from(desiredInfo.desired.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([ruleId, desired]) => ({
+          ruleId,
+          conditionData: desired.conditionData,
+          payloadIds: Array.from(new Set(desired.payloadIds)).sort(),
+          itemKeys: this.getDesiredItemKeysForRule(desired)
+        }))
+      });
+    }
+    getDesiredItemKeys(desiredInfo) {
+      const keys = /* @__PURE__ */ new Set();
+      for (const desired of desiredInfo.desired.values()) {
+        for (const key of this.getDesiredItemKeysForRule(desired)) keys.add(key);
+      }
+      return Array.from(keys).sort();
+    }
+    getDesiredItemKeysForRule(desired) {
+      const keys = /* @__PURE__ */ new Set();
+      for (const source of desired.sources) {
+        if (source.originatorMemberNumber == null || !source.itemName) continue;
+        keys.add(makeRuleCacheKey(source.originatorMemberNumber, source.itemName));
+      }
+      return Array.from(keys).sort();
+    }
+    pruneTargetAppearanceState(state, seenTargets) {
+      let changed = false;
+      for (const key of Object.keys(state.targetAppearances)) {
+        if (seenTargets.has(key)) continue;
+        const memberNumber = Number(key);
+        const hasManagedRules = Number.isFinite(memberNumber) && this.getTargetManagedRules(state, memberNumber).length > 0;
+        if (hasManagedRules) continue;
+        delete state.targetAppearances[key];
+        changed = true;
+      }
+      return changed;
+    }
+    getCharacterMemberNumber(character) {
+      const memberNumber = Number(character == null ? void 0 : character.MemberNumber);
+      return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+    }
+    debugTarget(message, memberNumber, detail) {
+      if (this.settingsStore.get().debugLogging !== true) return;
+      if (detail !== void 0) console.info("[BCXIR]", message, { memberNumber, detail });
+      else console.info("[BCXIR]", message, { memberNumber });
+    }
     getDesiredRuleContext(desired, settings) {
       const playerNumber = this.getPlayerMemberNumber();
       if (settings.rulePermissionMode === "useMe" && settings.dangerModeEnabled === true && settings.unlockUseMeMode === true) {
@@ -1315,7 +1603,11 @@
       if (context.kind === "creator") {
         return ["creator", String(context.memberNumber), context.allowMinimalCreator === true ? "minimal" : "room"].join(":");
       }
+      if (context.kind === "target") return "target:" + context.memberNumber;
       return context.kind;
+    }
+    managedContextKind(context) {
+      return context.kind === "target" ? "self" : context.kind;
     }
     getPlayerMemberNumber() {
       var _a;
@@ -1358,7 +1650,7 @@
           modApi.hookFunction(fnName, 1, (args, next) => {
             const result = next(args);
             const C = characterIndex == null ? root.Player : args[characterIndex];
-            if (!C || C === root.Player || typeof C.IsPlayer === "function" && C.IsPlayer()) {
+            if (!C || C === root.Player || Array.isArray(C.Appearance) || typeof C.IsPlayer === "function" && C.IsPlayer()) {
               synchronizer.scheduleSync(reason);
             }
             return result;
@@ -1399,6 +1691,8 @@
     allowForeignItemRules: true,
     respondToRuleRequests: true,
     autoRequestForeignRules: true,
+    applyMyRulesToNonPluginUsers: false,
+    removeMyRulesFromNonPluginUsers: false,
     showTransportMessages: true
   };
   function getSettingsBackupKey(root) {
@@ -1428,6 +1722,8 @@
       allowForeignItemRules: source.allowForeignItemRules !== false,
       respondToRuleRequests: source.respondToRuleRequests !== false,
       autoRequestForeignRules: source.autoRequestForeignRules !== false,
+      applyMyRulesToNonPluginUsers: source.applyMyRulesToNonPluginUsers === true,
+      removeMyRulesFromNonPluginUsers: source.removeMyRulesFromNonPluginUsers === true,
       showTransportMessages: source.showTransportMessages !== false
     };
   }
@@ -1567,6 +1863,10 @@
     "runtime.respond.tip": "Allow others to request payloads for your registered non-self-only items.",
     "runtime.request": "Auto request remote rules",
     "runtime.request.tip": "Request missing payloads for other people's crafted items.",
+    "runtime.nonPluginApply": "Apply my rules to non-BCXIR users",
+    "runtime.nonPluginApply.tip": "When someone without BCXIR wears one of your registered crafted items, add missing BCX rules using your normal BCX permission on them. Existing rules are never overwritten.",
+    "runtime.nonPluginRemove": "Remove my rules from non-BCXIR users",
+    "runtime.nonPluginRemove.tip": "When someone without BCXIR removes your registered item, remove only rules you added and that still exactly match your local registered rules.",
     "runtime.cacheDetails": "Cache: crafter {crafter} / rules {rules}",
     "runtime.noCache": "No cached remote item rules.",
     "runtime.deleteCache": "Delete Cache",
@@ -1711,6 +2011,10 @@
     "runtime.respond.tip": "允许他人请求你注册的、非仅自己生效的道具规则。",
     "runtime.request": "自动请求远端规则",
     "runtime.request.tip": "为其他玩家制作的道具请求缺失的规则数据。",
+    "runtime.nonPluginApply": "对非 BCXIR 用户应用我的规则",
+    "runtime.nonPluginApply.tip": "当未安装 BCXIR 的玩家穿戴你已注册的自制道具时，按你在对方 BCX 中的正常权限只新增缺失规则；已有规则永不覆盖。",
+    "runtime.nonPluginRemove": "从非 BCXIR 用户移除我的规则",
+    "runtime.nonPluginRemove.tip": "当未安装 BCXIR 的玩家脱下你的注册道具时，只移除由你添加且仍与本地注册规则完全一致的规则。",
     "runtime.cacheDetails": "缓存：制作者 {crafter} / 规则 {rules}",
     "runtime.noCache": "没有已缓存的远端道具规则。",
     "runtime.deleteCache": "删除缓存",
@@ -2233,6 +2537,8 @@
     foreign: 2,
     respond: 3,
     request: 4,
+    nonPluginApply: 5,
+    nonPluginRemove: 6,
     back: 7
   };
   const CACHE_ACTIONS = {
@@ -2296,6 +2602,8 @@
       this.drawLeftCheckbox(ROWS$2.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
       this.drawLeftCheckbox(ROWS$2.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
       this.drawLeftCheckbox(ROWS$2.request, this.t("runtime.request"), this.t("runtime.request.tip"), settings.autoRequestForeignRules, settings.allowForeignItemRules === false);
+      this.drawLeftCheckbox(ROWS$2.nonPluginApply, this.t("runtime.nonPluginApply"), this.t("runtime.nonPluginApply.tip"), settings.applyMyRulesToNonPluginUsers);
+      this.drawLeftCheckbox(ROWS$2.nonPluginRemove, this.t("runtime.nonPluginRemove"), this.t("runtime.nonPluginRemove.tip"), settings.removeMyRulesFromNonPluginUsers);
       if (currentCache) {
         this.drawCacheSelector(currentCache.itemName);
         this.drawRightLabel(RIGHT_CACHE_DETAIL_ROW, this.t("runtime.cacheDetails", { crafter: currentCache.crafter, rules: currentCache.payload.r.length }));
@@ -2321,6 +2629,8 @@
       if (this.leftCheckboxClicked(ROWS$2.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
       if (this.leftCheckboxClicked(ROWS$2.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
       if (settings.allowForeignItemRules !== false && this.leftCheckboxClicked(ROWS$2.request)) this.update({ autoRequestForeignRules: !settings.autoRequestForeignRules });
+      if (this.leftCheckboxClicked(ROWS$2.nonPluginApply)) this.update({ applyMyRulesToNonPluginUsers: !settings.applyMyRulesToNonPluginUsers });
+      if (this.leftCheckboxClicked(ROWS$2.nonPluginRemove)) this.update({ removeMyRulesFromNonPluginUsers: !settings.removeMyRulesFromNonPluginUsers });
       if (currentCache && this.mouseIn(RIGHT_X$1, this.rowY(RIGHT_CACHE_ROW) - 32, RIGHT_SELECTOR_W, 64)) {
         this.cacheIndex = this.getNewIndexFromNextPrevClick(this.cacheIndex, cacheEntries.length);
       }
@@ -3929,11 +4239,15 @@
       }
     }
   }
+  const PRESENCE_NEGATIVE_CACHE_MS = 6e4;
   class ItemRuleTransport {
     constructor(root, reporter, settingsStore) {
       __publicField(this, "installed", false);
       __publicField(this, "pending", /* @__PURE__ */ new Map());
       __publicField(this, "cooldowns", /* @__PURE__ */ new Map());
+      __publicField(this, "presenceCache", /* @__PURE__ */ new Map());
+      __publicField(this, "presenceNegativeCache", /* @__PURE__ */ new Map());
+      __publicField(this, "pendingPresence", /* @__PURE__ */ new Map());
       __publicField(this, "onRulesReceived", null);
       __publicField(this, "lastInboundType", null);
       __publicField(this, "lastOutboundType", null);
@@ -4021,6 +4335,34 @@
       this.debug("Item rule request sent.", { target: crafter, requestId, itemName });
       return requestId;
     }
+    async hasBCXIRPeer(target, timeoutMs = 800) {
+      const memberNumber = this.normalizeMemberNumber(target);
+      if (memberNumber == null) return false;
+      const cachedUntil = this.presenceCache.get(memberNumber) || 0;
+      if (cachedUntil > now()) return true;
+      const negativeCachedUntil = this.presenceNegativeCache.get(memberNumber) || 0;
+      if (negativeCachedUntil > now()) return false;
+      const requestId = this.makePresenceRequestId(memberNumber);
+      return new Promise((resolve) => {
+        const timer = this.root.setTimeout(() => {
+          this.pendingPresence.delete(requestId);
+          this.presenceNegativeCache.set(memberNumber, now() + PRESENCE_NEGATIVE_CACHE_MS);
+          resolve(false);
+        }, timeoutMs);
+        this.pendingPresence.set(requestId, { target: memberNumber, resolve, timer });
+        const sent = this.sendBeep(memberNumber, {
+          v: ITEM_RULE_PROTOCOL_VERSION,
+          command: ITEM_RULE_PRESENCE_PING_COMMAND,
+          requestId
+        });
+        if (!sent) {
+          this.root.clearTimeout(timer);
+          this.pendingPresence.delete(requestId);
+          this.presenceNegativeCache.set(memberNumber, now() + PRESENCE_NEGATIVE_CACHE_MS);
+          resolve(false);
+        }
+      });
+    }
     getPendingCount() {
       this.expirePending();
       return this.pending.size;
@@ -4053,6 +4395,20 @@
         this.handleResponse(sender, message);
         return true;
       }
+      if (message.command === ITEM_RULE_PRESENCE_PING_COMMAND) {
+        this.lastInboundType = ITEM_RULE_PRESENCE_PING_COMMAND;
+        this.sendBeep(sender, {
+          v: ITEM_RULE_PROTOCOL_VERSION,
+          command: ITEM_RULE_PRESENCE_PONG_COMMAND,
+          requestId: message.requestId
+        });
+        return true;
+      }
+      if (message.command === ITEM_RULE_PRESENCE_PONG_COMMAND) {
+        this.lastInboundType = ITEM_RULE_PRESENCE_PONG_COMMAND;
+        this.handlePresencePong(sender, message.requestId);
+        return true;
+      }
       return true;
     }
     extractMessage(data) {
@@ -4063,16 +4419,17 @@
       const commandData = envelope.command;
       if (!isPlainObject(commandData)) return null;
       const command = commandData.name;
-      if (command !== ITEM_RULE_REQUEST_COMMAND && command !== ITEM_RULE_RESPONSE_COMMAND) return null;
+      if (command !== ITEM_RULE_REQUEST_COMMAND && command !== ITEM_RULE_RESPONSE_COMMAND && command !== ITEM_RULE_PRESENCE_PING_COMMAND && command !== ITEM_RULE_PRESENCE_PONG_COMMAND) return null;
       const args = Array.isArray(commandData.args) ? commandData.args : [];
       const requestId = this.getArg(args, "requestId", "string");
       const itemName = this.getArg(args, "itemName", "string");
-      if (!requestId || !itemName) return null;
+      if (!requestId) return null;
+      if ((command === ITEM_RULE_REQUEST_COMMAND || command === ITEM_RULE_RESPONSE_COMMAND) && !itemName) return null;
       const message = {
         v: ITEM_RULE_PROTOCOL_VERSION,
         command,
         requestId,
-        itemName,
+        ...itemName ? { itemName } : {},
         item: this.getArg(args, "item")
       };
       const payload = this.getArg(args, "payload");
@@ -4093,7 +4450,7 @@
         this.debug("Item rule request ignored; responses disabled.", { sender, requestId: message.requestId });
         return;
       }
-      const itemText = message.item ? getItemNameAndDescriptionConcat(this.root, message.item) : message.itemName;
+      const itemText = message.item ? getItemNameAndDescriptionConcat(this.root, message.item) : message.itemName || "";
       const entry = findMatchingRegistryEntry(this.root, itemText);
       this.debug("Item rule request received.", { sender, requestId: message.requestId, itemName: message.itemName, matched: !!entry });
       if (!entry) return;
@@ -4112,6 +4469,7 @@
     handleResponse(sender, message) {
       var _a, _b, _c;
       this.expirePending();
+      const responseItemName = message.itemName || "";
       const pending = this.pending.get(message.requestId);
       if (!pending) {
         this.debug("Item rule response ignored; no pending request.", { sender, requestId: message.requestId });
@@ -4139,11 +4497,11 @@
         });
         return;
       }
-      if (!isPhraseInItemName(pending.itemName, message.itemName) && !isPhraseInItemName(message.itemName, pending.itemName)) {
+      if (!isPhraseInItemName(pending.itemName, responseItemName) && !isPhraseInItemName(responseItemName, pending.itemName)) {
         this.debug("Item rule response ignored; item name mismatch.", {
           requestId: message.requestId,
           pendingItemName: pending.itemName,
-          responseItemName: message.itemName
+          responseItemName
         });
         return;
       }
@@ -4156,6 +4514,15 @@
         this.reporter.localMessage("Received BCXIR rules for " + pending.itemName + ".", "info");
       }
       (_c = this.onRulesReceived) == null ? void 0 : _c.call(this);
+    }
+    handlePresencePong(sender, requestId) {
+      const pending = this.pendingPresence.get(requestId);
+      if (!pending || pending.target !== sender) return;
+      this.root.clearTimeout(pending.timer);
+      this.pendingPresence.delete(requestId);
+      this.presenceCache.set(sender, now() + 6e4);
+      this.presenceNegativeCache.delete(sender);
+      pending.resolve(true);
     }
     sendBeep(target, message) {
       try {
@@ -4209,9 +4576,9 @@
     }
     toEnvelope(target, message) {
       const args = [
-        { name: "requestId", value: message.requestId },
-        { name: "itemName", value: message.itemName }
+        { name: "requestId", value: message.requestId }
       ];
+      if (message.itemName !== void 0) args.push({ name: "itemName", value: message.itemName });
       if (message.item !== void 0) args.push({ name: "item", value: deepClone(message.item) });
       if (message.payload !== void 0) args.push({ name: "payload", value: deepClone(message.payload) });
       return {
@@ -4246,6 +4613,16 @@
         String(((_a = this.root.Player) == null ? void 0 : _a.MemberNumber) || 0),
         String(crafter),
         itemName.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40),
+        String(Date.now()),
+        String(Math.floor(Math.random() * 1e5))
+      ].join(":");
+    }
+    makePresenceRequestId(target) {
+      var _a;
+      return [
+        "bcxir-presence",
+        String(((_a = this.root.Player) == null ? void 0 : _a.MemberNumber) || 0),
+        String(target),
         String(Date.now()),
         String(Math.floor(Math.random() * 1e5))
       ].join(":");

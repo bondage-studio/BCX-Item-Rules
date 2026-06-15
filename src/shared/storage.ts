@@ -1,6 +1,6 @@
 import { SETTINGS_BACKUP_PREFIX, SETTINGS_EXTENSION_KEY, STORAGE_PREFIX } from "./constants";
 import type { HostWindow } from "../platform/root";
-import type { ActiveItemPayloadState, LocalState, RuleOriginatorSource } from "./types";
+import type { ActiveItemPayloadState, LocalState, RuleOriginatorSource, TargetAppearanceState, TargetManagedRuleState } from "./types";
 import { decodeExtensionSettingsRaw, encodeExtensionSettingsRaw } from "./extension-settings-codec";
 import { isPlainObject } from "./utils";
 
@@ -18,7 +18,14 @@ function settingsBackupKey(root: HostWindow): string {
 }
 
 export function emptyState(): LocalState {
-  return { version: 1, activePayloadIds: [], activeItemPayloads: {}, managed: {} };
+  return {
+    version: 1,
+    activePayloadIds: [],
+    activeItemPayloads: {},
+    managed: {},
+    targetAppearances: {},
+    targetManaged: {},
+  };
 }
 
 export function loadState(root: HostWindow): LocalState {
@@ -40,6 +47,8 @@ export function loadState(root: HostWindow): LocalState {
         ? extensionActiveItemPayloads.value
         : normalizeActiveItemPayloads(parsed.activeItemPayloads),
       managed: parsed.managed && typeof parsed.managed === "object" ? parsed.managed : {},
+      targetAppearances: normalizeTargetAppearances(parsed.targetAppearances),
+      targetManaged: normalizeTargetManaged(parsed.targetManaged),
     };
   } catch (error) {
     console.warn("[BCXIR] Failed to load local state; starting clean.", error);
@@ -147,4 +156,47 @@ function normalizeOriginatorSource(value: unknown): RuleOriginatorSource {
 function normalizeMemberNumber(value: unknown): number | null {
   const memberNumber = Number(value);
   return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+}
+
+function normalizeTargetAppearances(value: unknown): Record<string, TargetAppearanceState> {
+  const out: Record<string, TargetAppearanceState> = {};
+  if (!isPlainObject(value)) return out;
+  for (const [key, raw] of Object.entries(value)) {
+    if (!isPlainObject(raw)) continue;
+    const memberNumber = normalizeMemberNumber(raw.memberNumber);
+    const desiredHash = typeof raw.desiredHash === "string" ? raw.desiredHash : "";
+    if (memberNumber == null || !desiredHash) continue;
+    out[key] = {
+      memberNumber,
+      desiredHash,
+      itemKeys: normalizeStringArray(raw.itemKeys),
+      updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
+    };
+  }
+  return out;
+}
+
+function normalizeTargetManaged(value: unknown): Record<string, TargetManagedRuleState> {
+  const out: Record<string, TargetManagedRuleState> = {};
+  if (!isPlainObject(value)) return out;
+  for (const [key, raw] of Object.entries(value)) {
+    if (!isPlainObject(raw) || !isPlainObject(raw.lastApplied)) continue;
+    const targetMemberNumber = normalizeMemberNumber(raw.targetMemberNumber);
+    const ruleId = typeof raw.ruleId === "string" ? raw.ruleId.trim() : "";
+    if (targetMemberNumber == null || !ruleId) continue;
+    out[key] = {
+      targetMemberNumber,
+      ruleId,
+      lastApplied: raw.lastApplied as unknown as TargetManagedRuleState["lastApplied"],
+      payloadIds: normalizeStringArray(raw.payloadIds),
+      itemKeys: normalizeStringArray(raw.itemKeys),
+      updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
+    };
+  }
+  return out;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.map((entry) => String(entry || "").trim()).filter(Boolean))).sort();
 }

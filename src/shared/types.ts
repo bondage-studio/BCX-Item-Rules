@@ -100,11 +100,29 @@ export interface ActiveItemPayloadState {
   updatedAt: number;
 }
 
+export interface TargetAppearanceState {
+  memberNumber: number;
+  desiredHash: string;
+  itemKeys: string[];
+  updatedAt: number;
+}
+
+export interface TargetManagedRuleState {
+  targetMemberNumber: number;
+  ruleId: string;
+  lastApplied: RuleConditionData;
+  payloadIds: string[];
+  itemKeys: string[];
+  updatedAt: number;
+}
+
 export interface LocalState {
   version: 1;
   activePayloadIds: string[];
   activeItemPayloads: Record<string, ActiveItemPayloadState>;
   managed: Record<string, ManagedRuleState>;
+  targetAppearances: Record<string, TargetAppearanceState>;
+  targetManaged: Record<string, TargetManagedRuleState>;
 }
 
 export interface BCXIRSettings {
@@ -124,6 +142,8 @@ export interface BCXIRSettings {
   allowForeignItemRules: boolean;
   respondToRuleRequests: boolean;
   autoRequestForeignRules: boolean;
+  applyMyRulesToNonPluginUsers: boolean;
+  removeMyRulesFromNonPluginUsers: boolean;
   showTransportMessages: boolean;
 }
 

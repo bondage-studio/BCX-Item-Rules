@@ -4,8 +4,8 @@ import { BCXAdapter, type RuleQueryContext } from "../platform/bcx-adapter";
 import type { HostWindow } from "../platform/root";
 import { collectDesiredRulesFromAppearance } from "./scanner";
 import { loadState, saveState } from "../shared/storage";
-import type { BCXIRSettings, DesiredRule, DesiredRuleSource, DesiredRulesResult, ManagedRuleState } from "../shared/types";
-import { deepClone, now, sameStable } from "../shared/utils";
+import type { BCXIRSettings, DesiredRule, DesiredRuleSource, DesiredRulesResult, LocalState, ManagedRuleState, TargetManagedRuleState } from "../shared/types";
+import { deepClone, now, sameStable, stableStringify } from "../shared/utils";
 import { Reporter } from "../platform/reporter";
 import type { SettingsStore } from "../settings/settings-storage";
 import type { ItemRuleTransport } from "../platform/item-rule-transport";
@@ -133,7 +133,7 @@ export class RuleSynchronizer {
             updatedAt: now(),
             appliedSenderMemberNumber: applyContext.senderMemberNumber,
             appliedSenderWasMinimal: applyContext.allowMinimalCreator,
-            appliedContextKind: applyContext.context.kind,
+            appliedContextKind: this.managedContextKind(applyContext.context),
             suspendedExistingInactive: true,
           };
         }
@@ -152,7 +152,7 @@ export class RuleSynchronizer {
             updatedAt: now(),
             appliedSenderMemberNumber: applyContext.senderMemberNumber,
             appliedSenderWasMinimal: applyContext.allowMinimalCreator,
-            appliedContextKind: applyContext.context.kind,
+            appliedContextKind: this.managedContextKind(applyContext.context),
           };
         }
 
@@ -193,7 +193,7 @@ export class RuleSynchronizer {
         state.managed[ruleId].updatedAt = now();
         state.managed[ruleId].appliedSenderMemberNumber = applyContext.senderMemberNumber;
         state.managed[ruleId].appliedSenderWasMinimal = applyContext.allowMinimalCreator;
-        state.managed[ruleId].appliedContextKind = applyContext.context.kind;
+        state.managed[ruleId].appliedContextKind = this.managedContextKind(applyContext.context);
         changedMessages.push("Applied " + ruleId);
       }
     }
@@ -384,7 +384,11 @@ export class RuleSynchronizer {
       if (!settings.enabled && settings.debugLogging) {
         console.info("[BCXIR] Runtime disabled; releasing managed rules.");
       }
-      return await this.applyDesiredRules(desiredInfo, reason || "manual");
+      const applied = await this.applyDesiredRules(desiredInfo, reason || "manual");
+      if (settings.enabled && (settings.applyMyRulesToNonPluginUsers || settings.removeMyRulesFromNonPluginUsers)) {
+        await this.syncNonPluginTargets(settings, reason || "manual");
+      }
+      return applied;
     } catch (error) {
       console.error("[BCXIR] Sync failed.", error);
       this.reporter.reportOnce("sync", [
@@ -436,6 +440,276 @@ export class RuleSynchronizer {
       syncInFlight: this.syncInFlight,
       pendingSyncReason: this.pendingSyncReason,
     };
+  }
+
+  private async syncNonPluginTargets(settings: BCXIRSettings, reason: string): Promise<void> {
+    if (!this.itemRuleTransport) return;
+    const playerNumber = this.getPlayerMemberNumber();
+    if (playerNumber == null) return;
+    const targets = this.getRoomTargets(playerNumber);
+    const state = loadState(this.root);
+    const seenTargets = new Set<string>();
+    let stateChanged = false;
+
+    for (const target of targets) {
+      const memberNumber = this.getCharacterMemberNumber(target);
+      if (memberNumber == null || !this.targetHasBCX(memberNumber)) continue;
+      if (await this.itemRuleTransport.hasBCXIRPeer(memberNumber)) continue;
+      const desiredInfo = this.collectTargetDesiredRules(target, playerNumber, settings);
+      const targetKey = String(memberNumber);
+      const desiredHash = this.makeTargetDesiredHash(desiredInfo, settings);
+      const itemKeys = this.getDesiredItemKeys(desiredInfo);
+      const managedRules = this.getTargetManagedRules(state, memberNumber);
+      const hasStaleManagedRules = managedRules.some((managed) => !desiredInfo.desired.has(managed.ruleId));
+      seenTargets.add(targetKey);
+
+      if (state.targetAppearances[targetKey]?.desiredHash === desiredHash && !hasStaleManagedRules) {
+        continue;
+      }
+
+      const processed = await this.syncTargetRules(memberNumber, desiredInfo, settings, state);
+      if (processed) {
+        state.targetAppearances[targetKey] = {
+          memberNumber,
+          desiredHash,
+          itemKeys,
+          updatedAt: now(),
+        };
+        stateChanged = true;
+      }
+    }
+    if (this.pruneTargetAppearanceState(state, seenTargets)) stateChanged = true;
+    if (stateChanged) saveState(this.root, state);
+    if (settings.debugLogging) console.info("[BCXIR]", reason, "non-plugin target sync complete");
+  }
+
+  private getRoomTargets(playerNumber: number): any[] {
+    const characters = Array.isArray(this.root.ChatRoomCharacter) ? this.root.ChatRoomCharacter : [];
+    return characters.filter((character: any) => {
+      const memberNumber = this.getCharacterMemberNumber(character);
+      if (memberNumber == null || memberNumber === playerNumber) return false;
+      if (character === this.root.Player) return false;
+      if (typeof character.IsPlayer === "function" && character.IsPlayer()) return false;
+      return Array.isArray(character.Appearance);
+    });
+  }
+
+  private targetHasBCX(memberNumber: number): boolean {
+    const getVersion = this.root.bcx?.getCharacterVersion;
+    if (typeof getVersion !== "function") return false;
+    try {
+      return !!getVersion.call(this.root.bcx, memberNumber);
+    } catch {
+      return false;
+    }
+  }
+
+  private collectTargetDesiredRules(target: any, playerNumber: number, settings: BCXIRSettings): DesiredRulesResult {
+    return collectDesiredRulesFromAppearance(Array.isArray(target.Appearance) ? target.Appearance : [], {
+      scanItemCategoryOnly: settings.scanItemCategoryOnly,
+      getLocalPayloadsForItem: (item) => {
+        if (Number(item?.Craft?.MemberNumber) !== playerNumber) return [];
+        const itemName = getItemRuleName(item);
+        if (!itemName) return [];
+        const entry = findMatchingRegistryEntry(this.root, item, playerNumber);
+        if (!entry || entry.selfOnly) return [];
+        return [{
+          payload: entry.payload,
+          originatorMemberNumber: playerNumber,
+          originatorSource: "registry" as const,
+          allowMinimalCreator: false,
+          itemName,
+        }];
+      },
+    });
+  }
+
+  private async syncTargetRules(
+    memberNumber: number,
+    desiredInfo: DesiredRulesResult,
+    settings: BCXIRSettings,
+    state: LocalState,
+  ): Promise<boolean> {
+    const context: RuleQueryContext = { kind: "target", memberNumber };
+    const managedRules = this.getTargetManagedRules(state, memberNumber);
+    const cleanupRules = settings.removeMyRulesFromNonPluginUsers
+      ? managedRules.filter((managed) => !desiredInfo.desired.has(managed.ruleId))
+      : [];
+    const needsApply = settings.applyMyRulesToNonPluginUsers && desiredInfo.desired.size > 0;
+    if (!needsApply && !cleanupRules.length) return true;
+
+    let conditionsData: any;
+    try {
+      conditionsData = await this.bcx.fetchRuleConditions(context);
+    } catch (error) {
+      this.debugTarget("Failed to read target rules.", memberNumber, error);
+      return false;
+    }
+
+    if (needsApply) {
+      await this.applyDesiredRulesToTarget(memberNumber, desiredInfo, conditionsData, context, state);
+    }
+
+    if (cleanupRules.length) {
+      await this.cleanupManagedRulesFromTarget(memberNumber, cleanupRules, desiredInfo, conditionsData, context, state);
+    }
+
+    return true;
+  }
+
+  private async applyDesiredRulesToTarget(
+    memberNumber: number,
+    desiredInfo: DesiredRulesResult,
+    conditionsData: any,
+    context: RuleQueryContext,
+    state: LocalState,
+  ): Promise<void> {
+    for (const [ruleId, desired] of desiredInfo.desired.entries()) {
+      if (!this.bcx.isKnownRule(ruleId)) continue;
+      const managedKey = this.makeTargetManagedRuleKey(memberNumber, ruleId);
+      const managed = state.targetManaged[managedKey];
+      const current = this.bcx.getRulePublicData(conditionsData, ruleId);
+      const comparableCurrent = normalizeConditionForUpdate(current);
+      let createdByThisSync = false;
+
+      if (current) {
+        if (!managed) {
+          this.debugTarget("Target rule exists; not overwriting.", memberNumber, ruleId);
+          continue;
+        }
+        if (!comparableCurrent || !sameStable(comparableCurrent, managed.lastApplied)) {
+          delete state.targetManaged[managedKey];
+          this.debugTarget("Target managed rule changed externally; released.", memberNumber, ruleId);
+          continue;
+        }
+      } else {
+        const created = await this.bcx.ensureRuleExists(ruleId, conditionsData, context).catch((error) => {
+          this.debugTarget("Target rule create failed.", memberNumber, error);
+          return false;
+        });
+        if (created !== true) continue;
+        createdByThisSync = true;
+      }
+
+      const updateData = makeRuleUpdateData(desired.conditionData, current);
+      const updated = await this.bcx.updateRule(ruleId, updateData, context).catch((error) => {
+        this.debugTarget("Target rule update failed.", memberNumber, error);
+        return false;
+      });
+      if (updated !== true) {
+        if (createdByThisSync) await this.bcx.deleteRule(ruleId, context).catch(() => false);
+        continue;
+      }
+
+      state.targetManaged[managedKey] = {
+        targetMemberNumber: memberNumber,
+        ruleId,
+        lastApplied: deepClone(updateData),
+        payloadIds: Array.from(new Set(desired.payloadIds)).sort(),
+        itemKeys: this.getDesiredItemKeysForRule(desired),
+        updatedAt: now(),
+      };
+      if (conditionsData?.conditions && typeof conditionsData.conditions === "object") {
+        conditionsData.conditions[ruleId] = deepClone(updateData);
+      }
+    }
+  }
+
+  private async cleanupManagedRulesFromTarget(
+    memberNumber: number,
+    managedRules: TargetManagedRuleState[],
+    desiredInfo: DesiredRulesResult,
+    conditionsData: any,
+    context: RuleQueryContext,
+    state: LocalState,
+  ): Promise<void> {
+    for (const managed of managedRules) {
+      if (desiredInfo.desired.has(managed.ruleId)) continue;
+      const managedKey = this.makeTargetManagedRuleKey(memberNumber, managed.ruleId);
+      const current = this.bcx.getRulePublicData(conditionsData, managed.ruleId);
+      if (!current) {
+        delete state.targetManaged[managedKey];
+        continue;
+      }
+      const comparableCurrent = normalizeConditionForUpdate(current);
+      if (!comparableCurrent || !sameStable(comparableCurrent, managed.lastApplied)) {
+        delete state.targetManaged[managedKey];
+        this.debugTarget("Target managed rule changed before cleanup; released.", memberNumber, managed.ruleId);
+        continue;
+      }
+      const deleted = await this.bcx.deleteRule(managed.ruleId, context).catch((error) => {
+        this.debugTarget("Target rule delete failed.", memberNumber, error);
+        return false;
+      });
+      if (deleted === true) delete state.targetManaged[managedKey];
+    }
+  }
+
+  private getTargetManagedRules(state: LocalState, memberNumber: number): TargetManagedRuleState[] {
+    return Object.values(state.targetManaged).filter((managed) => managed.targetMemberNumber === memberNumber);
+  }
+
+  private makeTargetManagedRuleKey(memberNumber: number, ruleId: string): string {
+    return String(memberNumber) + ":" + ruleId;
+  }
+
+  private makeTargetDesiredHash(desiredInfo: DesiredRulesResult, settings: BCXIRSettings): string {
+    return stableStringify({
+      apply: settings.applyMyRulesToNonPluginUsers === true,
+      remove: settings.removeMyRulesFromNonPluginUsers === true,
+      errors: desiredInfo.errors,
+      conflicts: desiredInfo.conflicts,
+      rules: Array.from(desiredInfo.desired.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([ruleId, desired]) => ({
+          ruleId,
+          conditionData: desired.conditionData,
+          payloadIds: Array.from(new Set(desired.payloadIds)).sort(),
+          itemKeys: this.getDesiredItemKeysForRule(desired),
+        })),
+    });
+  }
+
+  private getDesiredItemKeys(desiredInfo: DesiredRulesResult): string[] {
+    const keys = new Set<string>();
+    for (const desired of desiredInfo.desired.values()) {
+      for (const key of this.getDesiredItemKeysForRule(desired)) keys.add(key);
+    }
+    return Array.from(keys).sort();
+  }
+
+  private getDesiredItemKeysForRule(desired: DesiredRule): string[] {
+    const keys = new Set<string>();
+    for (const source of desired.sources) {
+      if (source.originatorMemberNumber == null || !source.itemName) continue;
+      keys.add(makeRuleCacheKey(source.originatorMemberNumber, source.itemName));
+    }
+    return Array.from(keys).sort();
+  }
+
+  private pruneTargetAppearanceState(state: LocalState, seenTargets: Set<string>): boolean {
+    let changed = false;
+    for (const key of Object.keys(state.targetAppearances)) {
+      if (seenTargets.has(key)) continue;
+      const memberNumber = Number(key);
+      const hasManagedRules = Number.isFinite(memberNumber) &&
+        this.getTargetManagedRules(state, memberNumber).length > 0;
+      if (hasManagedRules) continue;
+      delete state.targetAppearances[key];
+      changed = true;
+    }
+    return changed;
+  }
+
+  private getCharacterMemberNumber(character: any): number | null {
+    const memberNumber = Number(character?.MemberNumber);
+    return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+  }
+
+  private debugTarget(message: string, memberNumber: number, detail?: unknown): void {
+    if (this.settingsStore.get().debugLogging !== true) return;
+    if (detail !== undefined) console.info("[BCXIR]", message, { memberNumber, detail });
+    else console.info("[BCXIR]", message, { memberNumber });
   }
 
   private getDesiredRuleContext(
@@ -499,7 +773,12 @@ export class RuleSynchronizer {
     if (context.kind === "creator") {
       return ["creator", String(context.memberNumber), context.allowMinimalCreator === true ? "minimal" : "room"].join(":");
     }
+    if (context.kind === "target") return "target:" + context.memberNumber;
     return context.kind;
+  }
+
+  private managedContextKind(context: RuleQueryContext): ManagedRuleState["appliedContextKind"] {
+    return context.kind === "target" ? "self" : context.kind;
   }
 
   private getPlayerMemberNumber(): number | null {

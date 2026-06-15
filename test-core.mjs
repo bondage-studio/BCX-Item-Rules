@@ -40,8 +40,15 @@ const bcxQueryLog = [];
 let currentTime = 1000000;
 let virtualReady = false;
 const bcxRuleConditions = {};
+const bcxTargetRuleConditions = new Map();
+const bcxVersions = new Map();
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+function getBcxConditionsForTarget(target) {
+  if (target === undefined || target === "Player" || target === 12345) return bcxRuleConditions;
+  if (!bcxTargetRuleConditions.has(target)) bcxTargetRuleConditions.set(target, {});
+  return bcxTargetRuleConditions.get(target);
 }
 const RealDate = Date;
 class FakeDate extends RealDate {
@@ -121,32 +128,38 @@ const context = {
     bcx: {
       version: "test",
       getCharacterVersion(memberNumber) {
-        return virtualReady && memberNumber === 990001337 ? "test" : null;
+        return virtualReady && memberNumber === 990001337 ? "test" : bcxVersions.get(memberNumber) || null;
       },
       getModApi() {
         return {
-          sendQuery(type, data) {
-            bcxQueryLog.push({ type, data, active: 1 });
-            if (type === "conditionsGet") return Promise.resolve({ conditions: clone(bcxRuleConditions) });
+          sendQuery(type, data, target = "Player") {
+            bcxQueryLog.push({ type, data, target, active: 1 });
+            const conditions = getBcxConditionsForTarget(target);
+            if (type === "conditionsGet") return Promise.resolve({ conditions: clone(conditions) });
             if (type === "ruleCreate") {
-              if (!bcxRuleConditions[data]) {
-                bcxRuleConditions[data] = {
+              if (!conditions[data]) {
+                conditions[data] = {
                   active: true,
                   favorite: false,
                   timer: null,
                   timerRemove: false,
                   requirements: null,
                   data: { enforce: true, log: true },
+                  ...(target !== "Player" ? { addedBy: 12345 } : {}),
                 };
               }
               return Promise.resolve(true);
             }
             if (type === "conditionUpdate") {
-              bcxRuleConditions[data.condition] = clone(data.data);
+              const previous = conditions[data.condition] || {};
+              conditions[data.condition] = {
+                ...clone(data.data),
+                ...(previous.addedBy !== undefined ? { addedBy: previous.addedBy } : {}),
+              };
               return Promise.resolve(true);
             }
             if (type === "ruleDelete") {
-              delete bcxRuleConditions[data];
+              delete conditions[data];
               return Promise.resolve(true);
             }
             return Promise.resolve(true);
@@ -1039,6 +1052,190 @@ delete context.window.ChatRoomCharacterDrawlist;
 assert.equal(await api.openAuthoring(), false);
 assert.equal(api.cancelAuthoring(), false);
 assert.equal(await api.finishAuthoring(), null);
+
+async function settlePresenceTimeouts() {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  while (timers.length) runNextTimer();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
+async function waitForPresencePing() {
+  for (let i = 0; i < 20; i++) {
+    await Promise.resolve();
+    const ping = serverSends.find((entry) => entry.packet?.Message?.command?.name === "bcxir-presence-ping");
+    if (ping) return ping;
+  }
+  return null;
+}
+
+api.registerItemRules("Target Collar", {
+  v: 1,
+  id: "target-collar",
+  r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "target" }, p: 1 }],
+});
+context.window.Player.Appearance = [];
+context.window.ChatRoomCharacter = [{
+  MemberNumber: 22222,
+  Name: "Target",
+  Appearance: [
+    { Asset: { Name: "Collar", Group: { Name: "ItemNeck", Category: "Item" } }, Craft: { Name: "Target Collar", MemberNumber: 12345 } },
+  ],
+}];
+bcxVersions.set(22222, "test");
+bcxTargetRuleConditions.clear();
+serverSends.length = 0;
+bcxQueryLog.length = 0;
+api.updateSettings({
+  enabled: true,
+  applyMyRulesToNonPluginUsers: true,
+  removeMyRulesFromNonPluginUsers: false,
+});
+const targetApplyPromise = api.syncNow("target-apply");
+await settlePresenceTimeouts();
+assert.equal(await targetApplyPromise, true);
+assert.equal(serverSends.some((entry) => entry.packet?.Message?.command?.name === "bcxir-presence-ping"), true);
+assert.equal(bcxTargetRuleConditions.get(22222).alt_restrict_sight.data.customData.blindnessStrength, "target");
+assert.equal(bcxTargetRuleConditions.get(22222).alt_restrict_sight.addedBy, 12345);
+serverSends.length = 0;
+bcxQueryLog.length = 0;
+const targetRepeatPromise = api.syncNow("target-repeat-no-query");
+await settlePresenceTimeouts();
+assert.equal(await targetRepeatPromise, true);
+assert.equal(bcxQueryLog.some((entry) => entry.target === 22222), false);
+assert.equal(serverSends.some((entry) => entry.packet?.Message?.command?.name === "bcxir-presence-ping"), false);
+
+bcxTargetRuleConditions.set(22222, {
+  alt_restrict_sight: {
+    active: true,
+    favorite: false,
+    timer: null,
+    timerRemove: false,
+    requirements: null,
+    data: { enforce: true, log: true, customData: { blindnessStrength: "existing-target" } },
+    addedBy: 99999,
+  },
+});
+serverSends.length = 0;
+const noOverwritePromise = api.syncNow("target-no-overwrite");
+await settlePresenceTimeouts();
+assert.equal(await noOverwritePromise, true);
+assert.equal(bcxTargetRuleConditions.get(22222).alt_restrict_sight.data.customData.blindnessStrength, "existing-target");
+assert.equal(bcxTargetRuleConditions.get(22222).alt_restrict_sight.addedBy, 99999);
+
+context.window.ChatRoomCharacter[0].Appearance = [];
+bcxTargetRuleConditions.set(22222, {
+  alt_restrict_sight: {
+    active: true,
+    favorite: false,
+    timer: null,
+    timerRemove: false,
+    requirements: null,
+    data: { enforce: true, log: true, customData: { blindnessStrength: "target" } },
+    addedBy: 12345,
+  },
+});
+api.updateSettings({
+  applyMyRulesToNonPluginUsers: false,
+  removeMyRulesFromNonPluginUsers: true,
+});
+const removePromise = api.syncNow("target-remove");
+await settlePresenceTimeouts();
+assert.equal(await removePromise, true);
+assert.equal(bcxTargetRuleConditions.get(22222).alt_restrict_sight, undefined);
+
+bcxTargetRuleConditions.set(22222, {
+  alt_restrict_sight: {
+    active: true,
+    favorite: false,
+    timer: null,
+    timerRemove: false,
+    requirements: null,
+    data: { enforce: true, log: true, customData: { blindnessStrength: "target" } },
+  },
+});
+const invisibleOriginPromise = api.syncNow("target-no-addedby");
+await settlePresenceTimeouts();
+assert.equal(await invisibleOriginPromise, true);
+assert.equal(bcxTargetRuleConditions.get(22222).alt_restrict_sight.data.customData.blindnessStrength, "target");
+
+api.registerItemRules("Target Collar", {
+  v: 1,
+  id: "target-collar-old-for-cleanup",
+  r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "target-old-cleanup" }, p: 1 }],
+});
+context.window.ChatRoomCharacter = [{
+  MemberNumber: 44444,
+  Name: "Managed Target",
+  Appearance: [
+    { Asset: { Name: "Collar", Group: { Name: "ItemNeck", Category: "Item" } }, Craft: { Name: "Target Collar", MemberNumber: 12345 } },
+  ],
+}];
+bcxVersions.set(44444, "test");
+bcxTargetRuleConditions.set(44444, {});
+serverSends.length = 0;
+bcxQueryLog.length = 0;
+api.updateSettings({
+  applyMyRulesToNonPluginUsers: true,
+  removeMyRulesFromNonPluginUsers: false,
+});
+const managedNoAddedByApplyPromise = api.syncNow("target-managed-no-addedby-apply");
+await settlePresenceTimeouts();
+assert.equal(await managedNoAddedByApplyPromise, true);
+assert.equal(bcxTargetRuleConditions.get(44444).alt_restrict_sight.data.customData.blindnessStrength, "target-old-cleanup");
+delete bcxTargetRuleConditions.get(44444).alt_restrict_sight.addedBy;
+api.registerItemRules("Target Collar", {
+  v: 1,
+  id: "target-collar-new-after-registry-change",
+  r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "target-new-registry" }, p: 1 }],
+});
+context.window.ChatRoomCharacter[0].Appearance = [];
+api.updateSettings({
+  applyMyRulesToNonPluginUsers: false,
+  removeMyRulesFromNonPluginUsers: true,
+});
+const managedNoAddedByRemovePromise = api.syncNow("target-managed-no-addedby-remove");
+await settlePresenceTimeouts();
+assert.equal(await managedNoAddedByRemovePromise, true);
+assert.equal(bcxTargetRuleConditions.get(44444).alt_restrict_sight, undefined);
+
+context.window.ChatRoomCharacter = [{
+  MemberNumber: 33333,
+  Name: "BCXIR Target",
+  Appearance: [
+    { Asset: { Name: "Collar", Group: { Name: "ItemNeck", Category: "Item" } }, Craft: { Name: "Target Collar", MemberNumber: 12345 } },
+  ],
+}];
+bcxVersions.set(33333, "test");
+bcxTargetRuleConditions.set(33333, {});
+serverSends.length = 0;
+bcxQueryLog.length = 0;
+api.updateSettings({
+  applyMyRulesToNonPluginUsers: true,
+  removeMyRulesFromNonPluginUsers: true,
+});
+const targetPongPromise = api.syncNow("target-pong-skip");
+const ping = await waitForPresencePing();
+assert.ok(ping);
+const presenceRequestId = ping.packet.Message.command.args.find((arg) => arg.name === "requestId").value;
+runHook("ServerAccountBeep", [{
+  MemberNumber: 33333,
+  BeepType: "Leash",
+  Message: {
+    IsBCXIR: true,
+    type: "command",
+    target: 12345,
+    version: 1,
+    command: {
+      name: "bcxir-presence-pong",
+      args: [{ name: "requestId", value: presenceRequestId }],
+    },
+  },
+}], () => {
+  throw new Error("BCXIR presence pong should be consumed");
+});
+assert.equal(await targetPongPromise, true);
+assert.equal(bcxQueryLog.some((entry) => entry.target === 33333), false);
+assert.deepEqual(bcxTargetRuleConditions.get(33333), {});
 
 // Regression: settings must survive a page reload even when the bootstrap tick
 // fires while BC is still at the login screen (Player truthy, no MemberNumber).
