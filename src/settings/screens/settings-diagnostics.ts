@@ -1,4 +1,5 @@
 import { clearRegistry } from "../../core/item-registry";
+import { hasLockedRegistryEntries, isWornItemRuleLockActive } from "../../core/worn-item-lock";
 import type { AuthoringSession } from "../../authoring/authoring-session";
 import type { BCXAdapter } from "../../platform/bcx-adapter";
 import type { ItemRuleTransport } from "../../platform/item-rule-transport";
@@ -66,6 +67,7 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
     const sync = this.synchronizer.getDiagnostics();
     const transport = this.itemRuleTransport?.getDiagnostics() || {};
     const authoring = this.authoring?.getState();
+    const lockActive = isWornItemRuleLockActive(this.root, settings);
     this.drawLeftLabel(ROWS.bcx, this.t("diagnostics.bcx", {
       bcx: this.bcx.canUseBCX() ? this.t("common.available") : this.t("common.unavailable"),
       authoring: authoring?.status || this.t("common.none"),
@@ -84,7 +86,13 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
     this.drawLeftCheckbox(ROWS.transport, this.t("diagnostics.transport"), this.t("diagnostics.transport.tip"), settings.showTransportMessages);
     this.drawLeftCheckbox(ROWS.debug, this.t("diagnostics.debug"), this.t("diagnostics.debug.tip"), settings.debugLogging);
     this.drawLeftCheckbox(ROWS.fallback, this.t("diagnostics.fallback"), this.t("diagnostics.fallback.tip"), settings.fallbackSyncEnabled);
-    this.drawLeftCheckbox(ROWS.cachedOffline, this.t("diagnostics.cachedOffline"), this.t("diagnostics.cachedOffline.tip"), settings.allowCachedOfflineCreator);
+    this.drawLeftCheckbox(
+      ROWS.cachedOffline,
+      this.t("diagnostics.cachedOffline"),
+      lockActive ? this.t("diagnostics.locked.tip") : this.t("diagnostics.cachedOffline.tip"),
+      settings.allowCachedOfflineCreator,
+      lockActive,
+    );
     this.drawActionButtons();
     if (authoring?.status && authoring.status !== "idle") {
       this.drawActionButton(ACTIONS.report, this.t("diagnostics.cancelAuth"), this.t("diagnostics.cancelAuth.tip"));
@@ -103,7 +111,7 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
       this.settingsStore.update({ fallbackSyncEnabled: !settings.fallbackSyncEnabled });
       this.synchronizer.startFallbackTimer();
     }
-    if (this.leftCheckboxClicked(ROWS.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
+    if (!isWornItemRuleLockActive(this.root, settings) && this.leftCheckboxClicked(ROWS.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
       this.settingsStore.update({ allowCachedOfflineCreator: !settings.allowCachedOfflineCreator });
       this.synchronizer.scheduleSync("diagnostics-cached-offline");
     }
@@ -119,7 +127,7 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
     }
     if (this.actionClicked(ACTIONS.back)) this.registry.setScreen?.("main");
     if (this.advancedActionClicked(ADVANCED_ACTIONS.reset) && this.confirm(this.t("diagnostics.confirm.reset"))) this.settingsStore.save(DEFAULT_SETTINGS);
-    if (this.advancedActionClicked(ADVANCED_ACTIONS.deleteRegistry) && this.confirm(this.t("diagnostics.confirm.deleteRules"))) {
+    if (!hasLockedRegistryEntries(this.root, settings) && this.advancedActionClicked(ADVANCED_ACTIONS.deleteRegistry) && this.confirm(this.t("diagnostics.confirm.deleteRules"))) {
       clearRegistry(this.root);
       this.synchronizer.scheduleSync("registry-clear");
     }
@@ -148,14 +156,20 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
 
   private drawAdvancedActions(): void {
     this.drawActionButton(ADVANCED_ACTIONS.reset, this.t(ADVANCED_ACTIONS.reset.labelKey), this.t(ADVANCED_ACTIONS.reset.tooltipKey));
-    this.drawActionButton(ADVANCED_ACTIONS.deleteRegistry, this.t(ADVANCED_ACTIONS.deleteRegistry.labelKey), this.t(ADVANCED_ACTIONS.deleteRegistry.tooltipKey));
+    const registryLocked = hasLockedRegistryEntries(this.root, this.settingsStore.get());
+    this.drawActionButton(
+      ADVANCED_ACTIONS.deleteRegistry,
+      this.t(ADVANCED_ACTIONS.deleteRegistry.labelKey),
+      registryLocked ? this.t("diagnostics.lockedRegistry.tip") : this.t(ADVANCED_ACTIONS.deleteRegistry.tooltipKey),
+      registryLocked,
+    );
     this.drawActionButton(ADVANCED_ACTIONS.disableCleanup, this.t(ADVANCED_ACTIONS.disableCleanup.labelKey), this.t(ADVANCED_ACTIONS.disableCleanup.tooltipKey));
     this.drawActionButton(ADVANCED_ACTIONS.disableSharing, this.t(ADVANCED_ACTIONS.disableSharing.labelKey), this.t(ADVANCED_ACTIONS.disableSharing.tooltipKey));
   }
 
-  private drawActionButton(action: { col: number; row: number }, label: string, tooltip: string): void {
+  private drawActionButton(action: { col: number; row: number }, label: string, tooltip: string, disabled = false): void {
     const { x, y } = this.actionRect(action);
-    this.drawButton(x, y, ACTION_W, 64, label, tooltip);
+    this.drawButton(x, y, ACTION_W, 64, label, tooltip, disabled);
   }
 
   private actionClicked(action: { col: number; row: number }): boolean {
@@ -177,15 +191,15 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
   private drawLeftLabel(row: number, label: string, description?: string): void {
     const y = this.rowY(row);
     const hovering = this.mouseIn(LEFT_X, y - 32, LEFT_LABEL_W, 64);
-    this.root.DrawTextFit(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
+    this.drawTextFitLeft(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
     if (hovering && description) this.drawTooltip(description);
   }
 
-  private drawLeftCheckbox(row: number, label: string, description: string, value: boolean): void {
+  private drawLeftCheckbox(row: number, label: string, description: string, value: boolean, disabled = false): void {
     const y = this.rowY(row);
     const hovering = this.mouseIn(LEFT_X, y - 32, LEFT_LABEL_W + 64, 64);
-    this.root.DrawTextFit(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
-    this.root.DrawCheckbox(LEFT_CHECKBOX_X, y - 32, 64, 64, "", value, false);
+    this.drawTextFitLeft(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
+    this.root.DrawCheckbox(LEFT_CHECKBOX_X, y - 32, 64, 64, "", value, disabled);
     if (hovering) this.drawTooltip(description);
   }
 

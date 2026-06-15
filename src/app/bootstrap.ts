@@ -21,7 +21,7 @@ export function bootstrap(): void {
   const itemRuleTransport = new ItemRuleTransport(root, reporter, settingsStore);
   const synchronizer = new RuleSynchronizer(root, bcx, reporter, settingsStore, itemRuleTransport);
   itemRuleTransport.setRulesReceivedCallback(() => synchronizer.scheduleSync("item-rule-response"));
-  const authoring = new AuthoringSession(root, bcx, reporter, synchronizer);
+  const authoring = new AuthoringSession(root, bcx, reporter, synchronizer, settingsStore);
   const settingsRegistry = new SettingsRegistry(root, settingsStore, bcx, synchronizer, authoring, itemRuleTransport);
   authoring.setSettingsItemRulesRestore((itemName) => settingsRegistry.restoreItemRules(itemName));
   let settingsInitialized = false;

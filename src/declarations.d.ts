@@ -1,5 +1,6 @@
 declare const unsafeWindow: Window & Record<string, any>;
 declare const __BCXIR_VERSION__: string;
+declare const MainCanvas: CanvasRenderingContext2D | undefined;
 declare const CraftingID: {
   root?: string;
   rightPanel?: string;

@@ -14,6 +14,7 @@ import {
   getCachedItemRules,
   getItemRuleName,
 } from "./item-registry";
+import { canRefreshRemoteItemRules } from "./worn-item-lock";
 
 export class RuleSynchronizer {
   private syncTimer = 0;
@@ -244,7 +245,10 @@ export class RuleSynchronizer {
             }
             if (Number.isFinite(crafter) && crafter > 0) {
               if (settings.allowForeignItemRules === false) return [];
-              if (settings.autoRequestForeignRules !== false) {
+              if (
+                settings.autoRequestForeignRules !== false &&
+                canRefreshRemoteItemRules(this.root, settings, crafter, itemName)
+              ) {
                 this.itemRuleTransport?.requestItemRules(item);
               }
               const cached = getCachedItemRules(this.root, crafter, itemName);

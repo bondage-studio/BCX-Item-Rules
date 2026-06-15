@@ -2,6 +2,7 @@ import { SETTINGS_BACKUP_PREFIX, SETTINGS_EXTENSION_KEY } from "../shared/consta
 import type { HostWindow } from "../platform/root";
 import type { BCXIRSettings } from "../shared/types";
 import { deepClone, isPlainObject } from "../shared/utils";
+import { filterSettingsPatchForWornItemLock } from "../core/worn-item-lock";
 
 export const DEFAULT_SETTINGS: BCXIRSettings = {
   v: 1,
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: BCXIRSettings = {
   dangerModeEnabled: false,
   unlockUseMeMode: false,
   useMeSuspendInactiveConflicts: false,
+  lockWornItemRules: false,
   allowForeignItemRules: true,
   respondToRuleRequests: true,
   autoRequestForeignRules: true,
@@ -68,6 +70,7 @@ export function normalizeSettings(value: unknown): BCXIRSettings {
     dangerModeEnabled,
     unlockUseMeMode,
     useMeSuspendInactiveConflicts: dangerModeEnabled && source.useMeSuspendInactiveConflicts === true,
+    lockWornItemRules: source.lockWornItemRules === true,
     allowForeignItemRules: source.allowForeignItemRules !== false,
     respondToRuleRequests: source.respondToRuleRequests !== false,
     autoRequestForeignRules: source.autoRequestForeignRules !== false,
@@ -139,7 +142,8 @@ export class ExtensionSettingsStore implements SettingsStore {
   }
 
   update(patch: Partial<Omit<BCXIRSettings, "v">>): BCXIRSettings {
-    const next = normalizeSettings({ ...this.current, ...patch, v: 1 });
+    const filteredPatch = filterSettingsPatchForWornItemLock(this.root, this.current, patch);
+    const next = normalizeSettings({ ...this.current, ...filteredPatch, v: 1 });
     this.save(next);
     return this.get();
   }

@@ -110,6 +110,7 @@ export interface BCXIRSettings {
   dangerModeEnabled: boolean;
   unlockUseMeMode: boolean;
   useMeSuspendInactiveConflicts: boolean;
+  lockWornItemRules: boolean;
   allowForeignItemRules: boolean;
   respondToRuleRequests: boolean;
   autoRequestForeignRules: boolean;

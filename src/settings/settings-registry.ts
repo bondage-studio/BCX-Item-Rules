@@ -97,7 +97,7 @@ export class SettingsRegistry {
   setScreen(screenName: SettingsScreenName, options: SettingsScreenOptions = {}): void {
     this.current?.unload();
     if (screenName === "itemRules") {
-      this.current = new SettingsItemRulesScreen(this, this.synchronizer, this.authoring, options.itemName);
+      this.current = new SettingsItemRulesScreen(this, this.settingsStore, this.synchronizer, this.authoring, options.itemName);
     } else if (screenName === "runtime") {
       this.current = new SettingsRuntimeScreen(this, this.settingsStore, this.synchronizer);
     } else if (screenName === "diagnostics") {

@@ -3,7 +3,9 @@ import type { Reporter } from "../platform/reporter";
 import type { HostWindow } from "../platform/root";
 import type { RuleSynchronizer } from "../core/sync";
 import { getRegisteredItem, registerItemRules } from "../core/item-registry";
+import { canModifyRegisteredItem } from "../core/worn-item-lock";
 import type { RegistryEntry } from "../shared/types";
+import type { SettingsStore } from "../settings/settings-storage";
 import { buildAuthoringPayload } from "./condition-export";
 import { VirtualBCXEndpoint } from "./virtual-bcx-endpoint";
 import { VirtualBCXTransport } from "./virtual-bcx-transport";
@@ -62,6 +64,7 @@ export class AuthoringSession {
     private readonly bcx: BCXAdapter,
     private readonly reporter: Reporter,
     private readonly synchronizer: RuleSynchronizer,
+    private readonly settingsStore?: SettingsStore,
   ) {
     this.characterManager = new VirtualCharacterManager(root);
     this.endpoint = new VirtualBCXEndpoint(root, VIRTUAL_MEMBER_NUMBER, () => this.store);
@@ -163,6 +166,9 @@ export class AuthoringSession {
     try {
       const payload = buildAuthoringPayload(this.makePayloadId(), this.store.exportRules());
       const itemName = this.confirmItemName();
+      if (this.settingsStore && !canModifyRegisteredItem(this.root, this.settingsStore.get(), itemName)) {
+        throw new Error("item rules are locked while this item is worn");
+      }
       const entry = registerItemRules(this.root, itemName, payload);
       this.lastRegisteredItem = entry.itemName;
       this.reporter.localMessage("BCXIR rules registered locally for item: " + entry.itemName + ".", "info");

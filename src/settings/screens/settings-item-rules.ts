@@ -5,8 +5,10 @@ import {
   updateRegisteredItem,
 } from "../../core/item-registry";
 import type { RuleSynchronizer } from "../../core/sync";
+import { canModifyRegisteredItem } from "../../core/worn-item-lock";
 import type { AuthoringSession } from "../../authoring/authoring-session";
 import type { RegistryEntry } from "../../shared/types";
+import type { SettingsStore } from "../settings-storage";
 import { SettingsScreen, type SettingsRegistryLike } from "./settings-screen";
 
 const NAME_INPUT_ID = "bcxir-item-rules-name";
@@ -17,6 +19,7 @@ export class SettingsItemRulesScreen extends SettingsScreen {
 
   constructor(
     registry: SettingsRegistryLike,
+    private readonly settingsStore: SettingsStore,
     private readonly synchronizer: RuleSynchronizer,
     private readonly authoring?: AuthoringSession,
     private readonly initialItemName?: string | null,
@@ -43,6 +46,7 @@ export class SettingsItemRulesScreen extends SettingsScreen {
   override run(): void {
     super.run();
     const current = this.currentEntry;
+    const currentLocked = current ? !canModifyRegisteredItem(this.root, this.settingsStore.get(), current.itemName) : false;
 
     this.root.MainCanvas.textAlign = "center";
     if (current) {
@@ -51,7 +55,7 @@ export class SettingsItemRulesScreen extends SettingsScreen {
       } else {
         this.root.DrawButton(550, this.rowY(0) - 32, 600, 64, current.itemName, "White", "", this.t("common.previousNext"));
       }
-      this.root.DrawButton(1180 - 4, this.rowY(0) - 32 - 4, 72, 72, "", "White", "", this.t("item.delete.tip"));
+      this.root.DrawButton(1180 - 4, this.rowY(0) - 32 - 4, 72, 72, "", currentLocked ? "#ddd" : "White", "", currentLocked ? this.t("item.locked.tip") : this.t("item.delete.tip"), currentLocked);
       this.root.DrawImageResize?.("Icons/Trash.png", 1180, this.rowY(0) - 32, 64, 64);
     } else {
       this.root.DrawTextFit(this.t("item.empty"), 780, this.rowY(0), 600, "#CBC3E3", "Black");
@@ -61,11 +65,11 @@ export class SettingsItemRulesScreen extends SettingsScreen {
     this.root.MainCanvas.textAlign = "left";
 
     if (current) {
-      this.positionTextInput(NAME_INPUT_ID, 2, this.t("item.name"), this.t("item.name.tip"), 600);
-      this.drawCheckbox(3, this.t("item.enabled"), this.t("item.enabled.tip"), current.enabled);
-      this.drawCheckbox(4, this.t("item.selfOnly"), this.t("item.selfOnly.tip"), current.selfOnly);
+      this.positionTextInput(NAME_INPUT_ID, 2, this.t("item.name"), currentLocked ? this.t("item.locked.tip") : this.t("item.name.tip"), 600);
+      this.drawCheckbox(3, this.t("item.enabled"), currentLocked ? this.t("item.locked.tip") : this.t("item.enabled.tip"), current.enabled, currentLocked);
+      this.drawCheckbox(4, this.t("item.selfOnly"), currentLocked ? this.t("item.locked.tip") : this.t("item.selfOnly.tip"), current.selfOnly, currentLocked);
       this.drawLabel(5, this.t("item.rulesUpdated", { rules: current.payload.r.length, updated: this.formatDate(current.updatedAt) }));
-      this.drawRowButton(6, this.t("item.edit"), this.t("item.edit.tip"));
+      this.drawRowButton(6, this.t("item.edit"), currentLocked ? this.t("item.locked.tip") : this.t("item.edit.tip"), currentLocked);
     } else {
       this.hideElement(NAME_INPUT_ID);
       this.drawLabel(2, this.t("item.createFirst"));
@@ -76,13 +80,14 @@ export class SettingsItemRulesScreen extends SettingsScreen {
   override click(): void {
     super.click();
     const current = this.currentEntry;
+    const currentLocked = current ? !canModifyRegisteredItem(this.root, this.settingsStore.get(), current.itemName) : false;
     if (current && this.root.MouseIn(550, this.rowY(0) - 32, 600, 64)) {
       this.saveCurrent();
       this.index = this.getNewIndexFromNextPrevClick(850, this.index, this.entries.length);
       this.loadCurrentIntoElements();
       return;
     }
-    if (current && this.root.MouseIn(1180, this.rowY(0) - 32, 64, 64)) {
+    if (current && !currentLocked && this.root.MouseIn(1180, this.rowY(0) - 32, 64, 64)) {
       deleteRegisteredItem(this.root, current.itemName);
       this.synchronizer.scheduleSync("settings-item-delete");
       this.reloadEntries();
@@ -98,21 +103,21 @@ export class SettingsItemRulesScreen extends SettingsScreen {
       this.loadCurrentIntoElements();
       return;
     }
-    if (current && this.checkboxClicked(3)) {
+    if (current && !currentLocked && this.checkboxClicked(3)) {
       updateRegisteredItem(this.root, current.itemName, { enabled: !current.enabled });
       this.synchronizer.scheduleSync("settings-item-toggle");
       this.reloadEntries();
       this.loadCurrentIntoElements();
       return;
     }
-    if (current && this.checkboxClicked(4)) {
+    if (current && !currentLocked && this.checkboxClicked(4)) {
       updateRegisteredItem(this.root, current.itemName, { selfOnly: !current.selfOnly });
       this.synchronizer.scheduleSync("settings-item-self-only");
       this.reloadEntries();
       this.loadCurrentIntoElements();
       return;
     }
-    if (current && this.rowButtonClicked(6)) {
+    if (current && !currentLocked && this.rowButtonClicked(6)) {
       this.saveCurrent();
       const itemName = this.currentEntry?.itemName || current.itemName;
       void this.authoring?.open({ itemName, returnTo: "settingsItemRules" });
@@ -147,6 +152,7 @@ export class SettingsItemRulesScreen extends SettingsScreen {
   private saveCurrent(): void {
     const current = this.currentEntry;
     if (!current) return;
+    if (!canModifyRegisteredItem(this.root, this.settingsStore.get(), current.itemName)) return;
     const itemName = this.elementValue(NAME_INPUT_ID).trim();
     if (!itemName || itemName === current.itemName) return;
     const updated = updateRegisteredItem(this.root, current.itemName, { itemName });

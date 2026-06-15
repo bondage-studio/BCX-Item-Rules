@@ -53,6 +53,7 @@ type EncodedPayload = {
 - Repeated unresolved requests cool down from 30 seconds up to 10 minutes per crafter/item.
 - Per-item `selfOnly` registry entries do not answer other players' requests.
 - `allowForeignItemRules=false` disables remote requests, remote cache application, and cached offline creator identities.
+- `lockWornItemRules=true` freezes permission/danger settings while matching items are worn, protects currently worn registry/cache entries from edits/deletes, and blocks fresh remote cache updates for those worn items.
 - Desired active rules are computed from all registry/cache payloads for currently worn items.
 - Apply through BCX public Mod API queries in self mode, through a controlled local BCX hidden-message query in creator mode so BCX sees the item creator as `sender`, or through the opt-in `Please use me` local operator mode.
 - Cached remote item rules can keep applying when the creator is offline by temporarily inserting a minimal local creator character into `ChatRoomCharacter`; this character is not drawn, synced, or granted forced item permission.
@@ -92,6 +93,7 @@ src/
 - Store settings in `Player.ExtensionSettings.BCXIR`.
 - Keep local backup at `localStorage["BCXIR_<MemberNumber>_backup"]`.
 - Default rule permission mode is creator-based. Advanced settings can switch back to self mode or disable cached offline creator identities.
+- Runtime settings expose `Lock worn item settings`; when active with a worn matching item, reset settings from Diagnostics / Advanced remains the intended escape hatch.
 - Dangerous Mode settings provide one master switch and two independent child switches: `Please use me` and `Replacement Mode`.
 - The settings menu owns item-rule registration through an LSCG-style `Item Rules` subpage.
 - Settings are split into overview, item rules, `Runtime / Sharing / Backup`, `Dangerous Mode`, and `Diagnostics` pages.

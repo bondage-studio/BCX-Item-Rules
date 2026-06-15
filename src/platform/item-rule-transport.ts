@@ -18,6 +18,7 @@ import {
   makeRuleCacheKey,
 } from "../core/item-registry";
 import { normalizePayload } from "../core/protocol";
+import { canRefreshRemoteItemRules } from "../core/worn-item-lock";
 import { deepClone, isPlainObject, now } from "../shared/utils";
 import { Reporter } from "./reporter";
 import type { SettingsStore } from "../settings/settings-storage";
@@ -119,6 +120,10 @@ export class ItemRuleTransport {
     }
     if (Number.isFinite(player) && player === crafter) {
       this.debug("Item rule request skipped; item was crafted by the local player.", { crafter, itemName });
+      return null;
+    }
+    if (settings && !canRefreshRemoteItemRules(this.root, settings, crafter, itemName)) {
+      this.debug("Item rule request skipped; worn item rule lock is active.", { crafter, itemName });
       return null;
     }
 
@@ -272,6 +277,16 @@ export class ItemRuleTransport {
     }
     if (!message.payload) {
       this.debug("Item rule response ignored; missing payload.", { sender, requestId: message.requestId });
+      return;
+    }
+    const settings = this.settingsStore?.get();
+    if (settings && !canRefreshRemoteItemRules(this.root, settings, sender, pending.itemName)) {
+      this.pending.delete(message.requestId);
+      this.debug("Item rule response ignored; worn item rule lock is active.", {
+        sender,
+        requestId: message.requestId,
+        itemName: pending.itemName,
+      });
       return;
     }
     if (!isPhraseInItemName(pending.itemName, message.itemName) && !isPhraseInItemName(message.itemName, pending.itemName)) {

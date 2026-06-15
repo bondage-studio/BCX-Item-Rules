@@ -86,7 +86,7 @@ Open Bondage Club's native extension settings menu and choose `BCXIR Settings`.
 The menu is organized into:
 
 - `Item Rules`: create, rename, enable, delete, and edit registered item rules.
-- `Runtime / Sharing / Backup`: permission mode, remote sharing, cache management, import/export.
+- `Runtime / Sharing / Backup`: permission mode, worn item locking, remote sharing, cache management, import/export.
 - `Diagnostics / Advanced`: sync/debug controls and dangerous cleanup actions.
 
 Settings are stored in:
@@ -114,6 +114,7 @@ Player.ExtensionSettings.BCX
 - Rules managed by BCXIR are restored or deleted conservatively when items are removed.
 - The virtual authoring character is local-only and temporary.
 - Remote responses are validated against the item's creator member number.
+- `Lock worn item settings` freezes permission/danger settings and protects currently worn item registry/cache entries, including blocking fresh remote cache updates for those worn items. It can be cleared by resetting settings from Diagnostics / Advanced.
 - `Dangerous Mode` is a separate opt-in settings page. Its master switch must be enabled before either risky option can be used.
 - `Please use me` is controlled by its own switch under Dangerous Mode. It uses a temporary local operator to apply item rules through BCX even when normal BCX permission checks would block self changes.
 - `Replacement Mode` is controlled by a separate switch under Dangerous Mode. Existing active rules are still protected; only inactive same-name rules may be temporarily replaced and restored when the item rule is removed.
@@ -286,7 +287,7 @@ localStorage["BCXIR_rule_cache_<MemberNumber>"]
 菜单分为：
 
 - `Item Rules` / `道具规则`：创建、重命名、启用、删除、编辑道具规则。
-- `Runtime / Sharing / Backup` / `运行 / 分享 / 备份`：权限模式、远端分享、缓存管理、导入导出。
+- `Runtime / Sharing / Backup` / `运行 / 分享 / 备份`：权限模式、已穿戴道具锁定、远端分享、缓存管理、导入导出。
 - `Diagnostics / Advanced` / `诊断 / 高级`：同步、调试和危险清理操作。
 
 设置保存到：
@@ -314,6 +315,7 @@ Player.ExtensionSettings.BCX
 - 道具移除后，BCXIR 会保守恢复或删除自己管理的规则。
 - 虚拟编辑角色只存在于本地、临时会话中。
 - 远端 response 会校验是否来自道具制作者。
+- `锁定已穿戴道具设置` 会冻结权限/危险模式设置，并保护当前穿戴道具对应的本地 registry/cache，包括阻止这些穿戴道具刷新远端 cache。可在诊断 / 高级中通过重置设置清除。
 - “危险模式”是独立的 opt-in 设置页面。必须先打开总开关，才能使用下面两个有风险的选项。
 - “请使用我”由危险模式中的独立开关控制。它会使用本地临时操作者通过 BCX 应用道具规则，即使普通 BCX 权限检查会阻止自己修改。
 - “替换模式”由危险模式中的另一个独立开关控制。已有 active 规则仍会被保护；只有同名 inactive 规则可能被临时替换，并在道具规则移除后恢复。

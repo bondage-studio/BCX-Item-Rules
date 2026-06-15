@@ -1,4 +1,5 @@
 import type { RuleSynchronizer } from "../../core/sync";
+import { isWornItemRuleLockActive } from "../../core/worn-item-lock";
 import type { SettingsStore } from "../settings-storage";
 import { SettingsScreen, type SettingsRegistryLike } from "./settings-screen";
 
@@ -27,26 +28,28 @@ export class SettingsDangerScreen extends SettingsScreen {
   override run(): void {
     super.run();
     const settings = this.settingsStore.get();
+    const lockActive = isWornItemRuleLockActive(this.root, settings);
     this.drawLabel(ROWS.intro, this.t("danger.warning"), this.t("danger.warning.tip"));
     this.drawCheckbox(
       ROWS.master,
       this.t("danger.master"),
-      this.t("danger.master.tip"),
+      lockActive ? this.t("danger.locked.tip") : this.t("danger.master.tip"),
       settings.dangerModeEnabled,
+      lockActive,
     );
     this.drawCheckbox(
       ROWS.useMe,
       this.t("danger.useMe"),
-      settings.dangerModeEnabled ? this.t("danger.useMe.tip") : this.t("danger.useMe.disabled.tip"),
+      lockActive ? this.t("danger.locked.tip") : settings.dangerModeEnabled ? this.t("danger.useMe.tip") : this.t("danger.useMe.disabled.tip"),
       settings.unlockUseMeMode,
-      !settings.dangerModeEnabled,
+      lockActive || !settings.dangerModeEnabled,
     );
     this.drawCheckbox(
       ROWS.replaceInactive,
       this.t("danger.replaceInactive"),
-      settings.dangerModeEnabled ? this.t("danger.replaceInactive.tip") : this.t("danger.replaceInactive.disabled.tip"),
+      lockActive ? this.t("danger.locked.tip") : settings.dangerModeEnabled ? this.t("danger.replaceInactive.tip") : this.t("danger.replaceInactive.disabled.tip"),
       settings.useMeSuspendInactiveConflicts,
-      !settings.dangerModeEnabled,
+      lockActive || !settings.dangerModeEnabled,
     );
     this.drawLabel(ROWS.summary, this.t("danger.summary"));
     this.drawRowButton(ROWS.back, this.t("common.back"), this.t("settings.tooltip.back"));
@@ -55,6 +58,10 @@ export class SettingsDangerScreen extends SettingsScreen {
   override click(): void {
     super.click();
     const settings = this.settingsStore.get();
+    if (isWornItemRuleLockActive(this.root, settings)) {
+      if (this.rowButtonClicked(ROWS.back)) this.registry.setScreen?.("main");
+      return;
+    }
     if (this.checkboxClicked(ROWS.master)) {
       if (settings.dangerModeEnabled) {
         this.settingsStore.update({

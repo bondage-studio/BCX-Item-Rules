@@ -562,6 +562,74 @@ assert.equal(await api.syncNow("cached-without-auto-request"), true);
 assert.equal(serverSends.length, 0);
 assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).managed.alt_restrict_sight.appliedSenderMemberNumber, 55555);
 api.updateSettings({ autoRequestForeignRules: true });
+api.updateSettings({ lockWornItemRules: true });
+assert.equal(api.getSettings().lockWornItemRules, true);
+serverSends.length = 0;
+assert.equal(api.requestItemRules(context.window.Player.Appearance[0]), null);
+assert.equal(serverSends.length, 0);
+api.updateSettings({
+  rulePermissionMode: "self",
+  dangerModeEnabled: true,
+  unlockUseMeMode: true,
+  useMeSuspendInactiveConflicts: true,
+  allowCachedOfflineCreator: false,
+  lockWornItemRules: false,
+});
+assert.equal(api.getSettings().rulePermissionMode, "creator");
+assert.equal(api.getSettings().dangerModeEnabled, false);
+assert.equal(api.getSettings().unlockUseMeMode, false);
+assert.equal(api.getSettings().useMeSuspendInactiveConflicts, false);
+assert.equal(api.getSettings().allowCachedOfflineCreator, true);
+assert.equal(api.getSettings().lockWornItemRules, true);
+serverSends.length = 0;
+assert.equal(await api.syncNow("worn-lock-cache-fallback"), true);
+assert.equal(serverSends.length, 0);
+context.window.Player.Appearance = [];
+api.updateSettings({ lockWornItemRules: false });
+assert.equal(api.getSettings().lockWornItemRules, false);
+api.clearRequestCooldowns();
+serverSends.length = 0;
+const lockedResponseRequestId = api.requestItemRules({
+  Asset: { Name: "Gag", Group: { Name: "ItemMouth", Category: "Item" } },
+  Craft: { Name: "Response Test", MemberNumber: 55555 },
+});
+assert.equal(typeof lockedResponseRequestId, "string");
+context.window.Player.Appearance = [{
+  Asset: { Name: "Gag", Group: { Name: "ItemMouth", Category: "Item" } },
+  Craft: { Name: "Response Test", MemberNumber: 55555 },
+}];
+api.updateSettings({ lockWornItemRules: true });
+runHook("ServerAccountBeep", [{
+  MemberNumber: 55555,
+  BeepType: "Leash",
+  Message: {
+    IsBCXIR: true,
+    type: "command",
+    target: 12345,
+    version: 1,
+    command: {
+      name: "bcxir-item-rules-response",
+      args: [
+        { name: "requestId", value: lockedResponseRequestId },
+        { name: "itemName", value: "Response Test" },
+        { name: "payload", value: { v: 1, id: "fresh-ignored", r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "fresh" } }] } },
+      ],
+    },
+  },
+}], () => {});
+assert.notEqual(api.getRuleCache().find((entry) => entry.itemName === "Response Test").payload.id, "fresh-ignored");
+context.window.Player.Appearance = [];
+api.updateSettings({ lockWornItemRules: false });
+context.window.Player.Appearance = [{
+  Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+  Craft: { Name: "Strict Blindfold", MemberNumber: 12345 },
+}];
+api.updateSettings({ lockWornItemRules: true });
+assert.equal(api.deleteRegisteredItem("Strict Blindfold"), false);
+assert.equal(api.updateRegisteredItem("Strict Blindfold", { enabled: false }), null);
+assert.equal(api.registerItemRules("Strict Blindfold", { v: 1, id: "blocked-overwrite", r: [] }).payload.id, "low");
+context.window.Player.Appearance = [];
+api.updateSettings({ lockWornItemRules: false });
 api.updateSettings({ allowForeignItemRules: false, autoRequestForeignRules: true });
 serverSends.length = 0;
 assert.equal(api.requestItemRules({
@@ -687,12 +755,12 @@ assert.equal(elements.has("bcxir-item-rules-name"), false);
 context.window.MouseX = 600;
 context.window.MouseY = 545;
 registeredExtensionSetting.click();
-context.window.MouseX = 1300;
+context.window.MouseX = 850;
 context.window.MouseY = 205;
 registeredExtensionSetting.click();
 assert.equal(api.getSettings().rulePermissionMode, "self");
-context.window.MouseX = 1300;
-context.window.MouseY = 817;
+context.window.MouseX = 1600;
+context.window.MouseY = 681;
 registeredExtensionSetting.click();
 context.window.MouseX = 600;
 context.window.MouseY = 613;

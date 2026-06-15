@@ -14,11 +14,17 @@ import {
   clearRuleCache,
   deleteCachedItemRules,
   deleteRegisteredItem,
+  getRegisteredItem,
   listRuleCacheEntries,
   listRegistryEntries,
   registerItemRules,
   updateRegisteredItem,
 } from "../core/item-registry";
+import {
+  canModifyCacheEntry,
+  canModifyRegisteredItem,
+  hasLockedCacheEntries,
+} from "../core/worn-item-lock";
 
 export function buildPublicApi(
   root: HostWindow,
@@ -36,26 +42,31 @@ export function buildPublicApi(
     getRegistry: () => listRegistryEntries(root),
     getRuleCache: () => listRuleCacheEntries(root),
     registerItemRules: (itemName: string, payload: Parameters<typeof registerItemRules>[2]) => {
+      if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return getRegisteredItem(root, itemName);
       const entry = registerItemRules(root, itemName, payload);
       synchronizer.scheduleSync("registry-api");
       return entry;
     },
     deleteRegisteredItem: (itemName: string) => {
+      if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return false;
       const deleted = deleteRegisteredItem(root, itemName);
       synchronizer.scheduleSync("registry-api");
       return deleted;
     },
     updateRegisteredItem: (itemName: string, patch: Parameters<typeof updateRegisteredItem>[2]) => {
+      if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return null;
       const entry = updateRegisteredItem(root, itemName, patch);
       synchronizer.scheduleSync("registry-api");
       return entry;
     },
     requestItemRules: (item: any, targetOverride?: number | string) => itemRuleTransport?.requestItemRules(item, targetOverride) ?? null,
     clearRuleCache: () => {
+      if (hasLockedCacheEntries(root, settingsStore.get())) return;
       clearRuleCache(root);
       synchronizer.scheduleSync("cache-api");
     },
     deleteCachedItemRules: (cacheKey: string) => {
+      if (!canModifyCacheEntry(root, settingsStore.get(), cacheKey)) return false;
       const deleted = deleteCachedItemRules(root, cacheKey);
       synchronizer.scheduleSync("cache-api");
       return deleted;

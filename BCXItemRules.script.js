@@ -319,7 +319,7 @@
       payload,
       source: {
         payloadId: payload.id,
-        originatorMemberNumber: normalizeMemberNumber(payloadInfo.originatorMemberNumber),
+        originatorMemberNumber: normalizeMemberNumber$1(payloadInfo.originatorMemberNumber),
         originatorSource: payloadInfo.originatorSource || "unknown",
         allowMinimalCreator: payloadInfo.allowMinimalCreator === true,
         itemName: payloadInfo.itemName
@@ -329,7 +329,7 @@
   function isPayloadWithOrigin(value) {
     return !!value && typeof value === "object" && "payload" in value;
   }
-  function normalizeMemberNumber(value) {
+  function normalizeMemberNumber$1(value) {
     const memberNumber = Number(value);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
   }
@@ -564,6 +564,80 @@
     saveRuleCache(root, state);
     return true;
   }
+  const LOCKED_SETTING_KEYS = /* @__PURE__ */ new Set([
+    "rulePermissionMode",
+    "dangerModeEnabled",
+    "unlockUseMeMode",
+    "useMeSuspendInactiveConflicts",
+    "allowCachedOfflineCreator",
+    "lockWornItemRules"
+  ]);
+  function getWornItemRuleLockState(root, settings) {
+    var _a, _b, _c;
+    const state = {
+      enabled: settings.lockWornItemRules === true,
+      active: false,
+      protectedItemCount: 0,
+      registryItemNames: /* @__PURE__ */ new Set(),
+      cacheKeys: /* @__PURE__ */ new Set(),
+      remoteItemKeys: /* @__PURE__ */ new Set()
+    };
+    if (!state.enabled) return state;
+    const playerNumber = normalizeMemberNumber((_a = root.Player) == null ? void 0 : _a.MemberNumber);
+    const appearance = Array.isArray((_b = root.Player) == null ? void 0 : _b.Appearance) ? root.Player.Appearance : [];
+    for (const item of appearance) {
+      if (!isWearerItem(item, { scanItemCategoryOnly: settings.scanItemCategoryOnly })) continue;
+      const itemName = getItemRuleName(item);
+      if (!itemName) continue;
+      const crafter = normalizeMemberNumber((_c = item == null ? void 0 : item.Craft) == null ? void 0 : _c.MemberNumber);
+      if (playerNumber != null && crafter === playerNumber) {
+        const entry = findMatchingRegistryEntry(root, item);
+        if (!entry) continue;
+        state.registryItemNames.add(normalizeItemName(entry.itemName));
+        state.protectedItemCount += 1;
+        continue;
+      }
+      if (crafter == null) continue;
+      const cacheKey = makeRuleCacheKey(crafter, itemName);
+      state.remoteItemKeys.add(cacheKey);
+      const cached = getCachedItemRules(root, crafter, itemName);
+      if (cached) state.cacheKeys.add(cached.cacheKey);
+      state.protectedItemCount += 1;
+    }
+    state.active = state.protectedItemCount > 0;
+    return state;
+  }
+  function isWornItemRuleLockActive(root, settings) {
+    return getWornItemRuleLockState(root, settings).active;
+  }
+  function canModifyRegisteredItem(root, settings, itemName) {
+    const lock = getWornItemRuleLockState(root, settings);
+    return !lock.active || !lock.registryItemNames.has(normalizeItemName(itemName));
+  }
+  function canModifyCacheEntry(root, settings, cacheKey) {
+    const lock = getWornItemRuleLockState(root, settings);
+    return !lock.active || !lock.cacheKeys.has(cacheKey);
+  }
+  function canRefreshRemoteItemRules(root, settings, crafter, itemName) {
+    const lock = getWornItemRuleLockState(root, settings);
+    return !lock.active || !lock.remoteItemKeys.has(makeRuleCacheKey(crafter, itemName));
+  }
+  function hasLockedRegistryEntries(root, settings) {
+    return getWornItemRuleLockState(root, settings).registryItemNames.size > 0;
+  }
+  function hasLockedCacheEntries(root, settings) {
+    return getWornItemRuleLockState(root, settings).cacheKeys.size > 0;
+  }
+  function filterSettingsPatchForWornItemLock(root, current, patch) {
+    if (!isWornItemRuleLockActive(root, current)) return patch;
+    const next = { ...patch };
+    for (const key of LOCKED_SETTING_KEYS) delete next[key];
+    return next;
+  }
+  function normalizeMemberNumber(value) {
+    const memberNumber = Number(value);
+    return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+  }
   function buildPublicApi(root, synchronizer, settingsStore, settingsRegistry, authoring, itemRuleTransport) {
     return {
       version: VERSION,
@@ -573,26 +647,31 @@
       getRegistry: () => listRegistryEntries(root),
       getRuleCache: () => listRuleCacheEntries(root),
       registerItemRules: (itemName, payload) => {
+        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return getRegisteredItem(root, itemName);
         const entry = registerItemRules(root, itemName, payload);
         synchronizer.scheduleSync("registry-api");
         return entry;
       },
       deleteRegisteredItem: (itemName) => {
+        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return false;
         const deleted = deleteRegisteredItem(root, itemName);
         synchronizer.scheduleSync("registry-api");
         return deleted;
       },
       updateRegisteredItem: (itemName, patch) => {
+        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return null;
         const entry = updateRegisteredItem(root, itemName, patch);
         synchronizer.scheduleSync("registry-api");
         return entry;
       },
       requestItemRules: (item, targetOverride) => (itemRuleTransport == null ? void 0 : itemRuleTransport.requestItemRules(item, targetOverride)) ?? null,
       clearRuleCache: () => {
+        if (hasLockedCacheEntries(root, settingsStore.get())) return;
         clearRuleCache(root);
         synchronizer.scheduleSync("cache-api");
       },
       deleteCachedItemRules: (cacheKey) => {
+        if (!canModifyCacheEntry(root, settingsStore.get(), cacheKey)) return false;
         const deleted = deleteCachedItemRules(root, cacheKey);
         synchronizer.scheduleSync("cache-api");
         return deleted;
@@ -906,7 +985,7 @@
             }
             if (Number.isFinite(crafter) && crafter > 0) {
               if (settings.allowForeignItemRules === false) return [];
-              if (settings.autoRequestForeignRules !== false) {
+              if (settings.autoRequestForeignRules !== false && canRefreshRemoteItemRules(this.root, settings, crafter, itemName)) {
                 (_b = this.itemRuleTransport) == null ? void 0 : _b.requestItemRules(item);
               }
               const cached = getCachedItemRules(this.root, crafter, itemName);
@@ -1077,6 +1156,7 @@
     dangerModeEnabled: false,
     unlockUseMeMode: false,
     useMeSuspendInactiveConflicts: false,
+    lockWornItemRules: false,
     allowForeignItemRules: true,
     respondToRuleRequests: true,
     autoRequestForeignRules: true,
@@ -1112,6 +1192,7 @@
       dangerModeEnabled,
       unlockUseMeMode,
       useMeSuspendInactiveConflicts: dangerModeEnabled && source.useMeSuspendInactiveConflicts === true,
+      lockWornItemRules: source.lockWornItemRules === true,
       allowForeignItemRules: source.allowForeignItemRules !== false,
       respondToRuleRequests: source.respondToRuleRequests !== false,
       autoRequestForeignRules: source.autoRequestForeignRules !== false,
@@ -1179,7 +1260,8 @@
       }
     }
     update(patch) {
-      const next = normalizeSettings({ ...this.current, ...patch, v: 1 });
+      const filteredPatch = filterSettingsPatchForWornItemLock(this.root, this.current, patch);
+      const next = normalizeSettings({ ...this.current, ...filteredPatch, v: 1 });
       this.save(next);
       return this.get();
     }
@@ -1224,14 +1306,19 @@
     "item.rulesUpdated": "Rules: {rules} / Updated: {updated}",
     "item.edit": "Edit BCX Rules",
     "item.edit.tip": "Open the virtual BCX character rule editor for this item.",
+    "item.locked.tip": "This registered item is currently worn and protected by the worn item lock.",
     "item.createFirst": "Create an item rule entry to begin.",
     "item.defaultName": "BCXIR Item No. {index}",
     "runtime.title": "BCXIR Runtime / Sharing / Backup",
     "runtime.permissionMode": "Permission mode:",
     "runtime.permissionMode.tip": "Choose who BCXIR uses when applying item rules. The risky Please use me option must be enabled from Dangerous Mode first.",
+    "runtime.permissionMode.locked.tip": "This is locked while a protected BCXIR item is worn. Use Diagnostics / Advanced reset to clear the lock setting.",
     "runtime.permission.creator": "Item creator",
     "runtime.permission.self": "Myself",
     "runtime.permission.useMe": "Please use me",
+    "runtime.lockWorn": "Lock worn item settings",
+    "runtime.lockWorn.tip": "When a matching item is worn, freeze permission and dangerous-mode settings and protect that item's local rules/cache.",
+    "runtime.lockWorn.active.tip": "This lock is active because a matching item is worn. Use Diagnostics / Advanced reset if you need to clear it.",
     "runtime.foreign": "Allow rules from other people's items",
     "runtime.foreign.tip": "When disabled, remote cache and remote requests are ignored.",
     "runtime.respond": "Respond to rule requests",
@@ -1244,6 +1331,9 @@
     "runtime.deleteCache.tip": "Delete this cached remote item payload.",
     "runtime.clearCache": "Clear Cache",
     "runtime.clearCache.tip": "Delete all cached remote item rules.",
+    "runtime.lockedCache.tip": "This cache belongs to a currently worn item and is protected by the worn item lock.",
+    "runtime.lockedCache.clear.tip": "Clear cache is disabled while any currently worn item cache is protected.",
+    "runtime.lockedRegistry.tip": "Import is disabled while a currently worn registered item is protected.",
     "runtime.exportRules": "Export Rules",
     "runtime.exportRules.tip": "Copy registered item rules JSON.",
     "runtime.importRules": "Import Rules",
@@ -1268,6 +1358,7 @@
     "danger.replaceInactive.tip": "Lets BCXIR temporarily replace an existing same-name rule only when that rule is currently turned off, then restore it later.",
     "danger.replaceInactive.disabled.tip": "Enable Dangerous Mode first.",
     "danger.summary": "Active existing rules are still protected and will not be overwritten.",
+    "danger.locked.tip": "Dangerous Mode settings are locked while a protected BCXIR item is worn.",
     "danger.confirm.master": "Enable Dangerous Mode? This only unlocks the risky options; it does not enable them yet.",
     "danger.confirm.useMe": "Enable Please use me? When selected in Runtime, item rules may apply to you even when normal BCX self-permission checks would block them. Existing active rules are still protected.",
     "danger.confirm.replaceInactive": "Enable Replacement Mode? BCXIR may temporarily replace a matching rule that already exists but is turned off, then restore it later.",
@@ -1287,6 +1378,8 @@
     "diagnostics.fallback.tip": "Run a low-frequency safety scan in addition to hook-triggered syncs.",
     "diagnostics.cachedOffline": "Allow cached offline creator",
     "diagnostics.cachedOffline.tip": "Use trusted cache to create a minimal local creator identity for BCX checks.",
+    "diagnostics.locked.tip": "This setting is locked while a protected BCXIR item is worn.",
+    "diagnostics.lockedRegistry.tip": "Registered rules for a currently worn item are protected. Reset settings first if you need to remove the lock.",
     "diagnostics.useMeUnlock": 'Unlock "Please use me"',
     "diagnostics.useMeUnlock.tip": "Advanced risky mode: lets BCXIR apply item rules to you through a local operator even when normal BCX permission checks would block it.",
     "diagnostics.suspendInactive": "Suspend inactive conflicts",
@@ -1356,14 +1449,19 @@
     "item.rulesUpdated": "规则：{rules} / 更新：{updated}",
     "item.edit": "编辑 BCX 规则",
     "item.edit.tip": "打开此道具的虚拟 BCX 角色规则编辑器。",
+    "item.locked.tip": "此注册道具正在被穿戴，已受穿戴锁保护。",
     "item.createFirst": "先创建一个道具规则条目。",
     "item.defaultName": "BCXIR 道具 {index}",
     "runtime.title": "BCXIR 运行 / 分享 / 备份",
     "runtime.permissionMode": "权限模式：",
     "runtime.permissionMode.tip": "选择 BCXIR 应用道具规则时使用的身份。有风险的“请使用我”选项需要先在危险模式中开启。",
+    "runtime.permissionMode.locked.tip": "受保护的 BCXIR 道具正在被穿戴，此项已锁定。可在诊断 / 高级中重置设置来清除锁。",
     "runtime.permission.creator": "道具制作者",
     "runtime.permission.self": "自己",
     "runtime.permission.useMe": "请使用我",
+    "runtime.lockWorn": "锁定已穿戴道具设置",
+    "runtime.lockWorn.tip": "穿戴匹配道具时，冻结权限和危险模式设置，并保护该道具的本地规则/缓存。",
+    "runtime.lockWorn.active.tip": "因为正在穿戴匹配道具，此锁已生效。如需清除，请在诊断 / 高级中重置设置。",
     "runtime.foreign": "允许他人的道具规则影响自己",
     "runtime.foreign.tip": "关闭后，将忽略远端缓存和远端规则请求。",
     "runtime.respond": "响应规则请求",
@@ -1376,6 +1474,9 @@
     "runtime.deleteCache.tip": "删除当前缓存的远端道具规则。",
     "runtime.clearCache": "清空缓存",
     "runtime.clearCache.tip": "删除所有远端道具规则缓存。",
+    "runtime.lockedCache.tip": "此缓存属于当前穿戴的道具，已受穿戴锁保护。",
+    "runtime.lockedCache.clear.tip": "有当前穿戴道具的缓存受保护时，不能清空缓存。",
+    "runtime.lockedRegistry.tip": "有当前穿戴的注册道具受保护时，不能导入规则。",
     "runtime.exportRules": "导出规则",
     "runtime.exportRules.tip": "复制已注册道具规则 JSON。",
     "runtime.importRules": "导入规则",
@@ -1400,6 +1501,7 @@
     "danger.replaceInactive.tip": "只在同名现有规则处于关闭状态时，允许 BCXIR 临时替换它，并在之后恢复。",
     "danger.replaceInactive.disabled.tip": "请先启用危险模式。",
     "danger.summary": "已有 active 规则仍会被保护，不会被覆盖。",
+    "danger.locked.tip": "受保护的 BCXIR 道具正在被穿戴，危险模式设置已锁定。",
     "danger.confirm.master": "启用危险模式？这只会解锁有风险的选项，不会直接启用它们。",
     "danger.confirm.useMe": "启用“请使用我”？当你在运行设置中选择它后，道具规则可能在普通 BCX 自我权限检查会阻止时仍应用到你身上。已有 active 规则仍会被保护。",
     "danger.confirm.replaceInactive": "启用替换模式？BCXIR 可能会临时替换一个已经存在但关闭的同名规则，并在之后恢复它。",
@@ -1419,6 +1521,8 @@
     "diagnostics.fallback.tip": "除 hook 触发同步外，低频运行安全扫描。",
     "diagnostics.cachedOffline": "允许缓存的离线制作者",
     "diagnostics.cachedOffline.tip": "使用可信缓存创建最小本地制作者身份，以便 BCX 权限检查。",
+    "diagnostics.locked.tip": "受保护的 BCXIR 道具正在被穿戴，此设置已锁定。",
+    "diagnostics.lockedRegistry.tip": "当前穿戴道具的注册规则受保护。如需移除此锁，请先重置设置。",
     "diagnostics.useMeUnlock": "解锁“请使用我”",
     "diagnostics.useMeUnlock.tip": "高级风险模式：允许 BCXIR 通过本地临时操作者把道具规则应用到你身上，即使普通 BCX 权限检查会阻止。",
     "diagnostics.suspendInactive": "挂起 inactive 冲突",
@@ -1492,13 +1596,9 @@
     unload() {
     }
     run() {
-      var _a;
       const root = this.root;
-      const previousAlign = (_a = root.MainCanvas) == null ? void 0 : _a.textAlign;
-      root.MainCanvas.textAlign = "left";
-      root.DrawText("- " + this.title + " -", 180, 130, "Black", "Gray");
+      this.drawTitle();
       root.DrawButton(1815, 75, 90, 90, "", "White", "Icons/Exit.png", this.t("settings.exit"));
-      if (previousAlign) root.MainCanvas.textAlign = previousAlign;
     }
     click() {
       if (this.mouseIn(1815, 75, 90, 90)) this.exit();
@@ -1515,7 +1615,7 @@
     drawLabel(row, label, description) {
       const y = this.rowY(row);
       const hovering = this.mouseIn(_SettingsScreen.START_X, y - 32, _SettingsScreen.LABEL_W, 64);
-      this.root.DrawTextFit(label, _SettingsScreen.START_X, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.drawTextFitLeft(label, _SettingsScreen.START_X, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
       if (hovering && description) this.drawTooltip(description);
     }
     drawCheckbox(row, label, description, value, disabled = false) {
@@ -1523,7 +1623,7 @@
       const labelX = _SettingsScreen.START_X;
       const boxX = _SettingsScreen.VALUE_X;
       const hovering = this.mouseIn(labelX, y - 32, _SettingsScreen.LABEL_W + 64, 64);
-      this.root.DrawTextFit(label, labelX, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.drawTextFitLeft(label, labelX, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
       this.root.DrawCheckbox(boxX, y - 32, 64, 64, "", value, disabled);
       if (hovering) this.drawTooltip(description);
     }
@@ -1536,14 +1636,14 @@
     drawRowButton(row, label, tooltip, disabled = false) {
       this.drawButton(_SettingsScreen.VALUE_X, this.rowY(row) - 32, 300, 64, label, tooltip, disabled);
     }
-    drawSelector(row, label, description, value) {
+    drawSelector(row, label, description, value, disabled = false) {
       const y = this.rowY(row);
       const hovering = this.mouseIn(_SettingsScreen.START_X, y - 32, _SettingsScreen.LABEL_W + 420, 64);
-      this.root.DrawTextFit(label, _SettingsScreen.START_X, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.drawTextFitLeft(label, _SettingsScreen.START_X, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
       if (typeof this.root.DrawBackNextButton === "function") {
-        this.root.DrawBackNextButton(_SettingsScreen.VALUE_X, y - 32, 360, 64, value, "White", "", () => this.t("common.previous"), () => this.t("common.next"));
+        this.root.DrawBackNextButton(_SettingsScreen.VALUE_X, y - 32, 360, 64, value, disabled ? "#ddd" : "White", "", () => this.t("common.previous"), () => this.t("common.next"), disabled);
       } else {
-        this.root.DrawButton(_SettingsScreen.VALUE_X, y - 32, 360, 64, value, "White", "", this.t("common.previousNext"));
+        this.root.DrawButton(_SettingsScreen.VALUE_X, y - 32, 360, 64, value, disabled ? "#ddd" : "White", "", this.t("common.previousNext"), disabled);
       }
       if (hovering) this.drawTooltip(description);
     }
@@ -1576,7 +1676,7 @@
     positionTextInput(id, row, label, description, width = 600) {
       const y = this.rowY(row);
       const hovering = this.mouseIn(_SettingsScreen.START_X, y - 32, _SettingsScreen.LABEL_W, 64);
-      this.root.DrawTextFit(label, _SettingsScreen.START_X, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.drawTextFitLeft(label, _SettingsScreen.START_X, y, _SettingsScreen.LABEL_W, hovering ? "Red" : "Black", "Gray");
       if (typeof this.root.ElementPosition === "function") {
         this.root.ElementPosition(id, _SettingsScreen.VALUE_X + width / 2, y, width);
       }
@@ -1603,13 +1703,42 @@
       if (element) element.value = value;
     }
     drawTooltip(text) {
-      var _a;
-      const previousAlign = (_a = this.root.MainCanvas) == null ? void 0 : _a.textAlign;
-      if (this.root.MainCanvas) this.root.MainCanvas.textAlign = "center";
-      this.root.DrawRect(300, 850, 1400, 65, "#FFFF88");
-      this.root.DrawEmptyRect(300, 850, 1400, 65, "black", 2);
-      this.root.DrawTextFit(text, 1e3, 883, 1360, "black");
-      if (this.root.MainCanvas && previousAlign) this.root.MainCanvas.textAlign = previousAlign;
+      this.withTextAlign("center", () => {
+        this.root.DrawRect(300, 850, 1400, 65, "#FFFF88");
+        this.root.DrawEmptyRect(300, 850, 1400, 65, "black", 2);
+        this.root.DrawTextFit(text, 1e3, 883, 1360, "black");
+      });
+    }
+    drawTitle() {
+      this.drawTextFitLeft("- " + this.title + " -", 180, 130, 1200, "Black", "Gray");
+    }
+    drawTextFitLeft(text, leftX, y, width, color = "Black", outline) {
+      this.withTextAlign("left", () => {
+        this.root.DrawTextFit(text, leftX, y, width, color, outline);
+      });
+    }
+    withTextAlign(align, callback) {
+      const canvas = this.getGameCanvas();
+      if (canvas && typeof canvas.save === "function" && typeof canvas.restore === "function") {
+        canvas.save();
+        canvas.textAlign = align;
+        try {
+          return callback();
+        } finally {
+          canvas.restore();
+        }
+      }
+      const previousAlign = canvas == null ? void 0 : canvas.textAlign;
+      if (canvas) canvas.textAlign = align;
+      try {
+        return callback();
+      } finally {
+        if (canvas && previousAlign) canvas.textAlign = previousAlign;
+      }
+    }
+    getGameCanvas() {
+      if (typeof MainCanvas !== "undefined" && MainCanvas) return MainCanvas;
+      return this.root.MainCanvas;
     }
     cleanupElements() {
       var _a, _b;
@@ -1689,10 +1818,11 @@
   }
   const NAME_INPUT_ID = "bcxir-item-rules-name";
   class SettingsItemRulesScreen extends SettingsScreen {
-    constructor(registry, synchronizer, authoring, initialItemName) {
+    constructor(registry, settingsStore, synchronizer, authoring, initialItemName) {
       super(registry);
       __publicField(this, "entries", []);
       __publicField(this, "index", 0);
+      this.settingsStore = settingsStore;
       this.synchronizer = synchronizer;
       this.authoring = authoring;
       this.initialItemName = initialItemName;
@@ -1714,6 +1844,7 @@
       var _a, _b, _c, _d;
       super.run();
       const current = this.currentEntry;
+      const currentLocked = current ? !canModifyRegisteredItem(this.root, this.settingsStore.get(), current.itemName) : false;
       this.root.MainCanvas.textAlign = "center";
       if (current) {
         if (typeof this.root.DrawBackNextButton === "function") {
@@ -1721,7 +1852,7 @@
         } else {
           this.root.DrawButton(550, this.rowY(0) - 32, 600, 64, current.itemName, "White", "", this.t("common.previousNext"));
         }
-        this.root.DrawButton(1180 - 4, this.rowY(0) - 32 - 4, 72, 72, "", "White", "", this.t("item.delete.tip"));
+        this.root.DrawButton(1180 - 4, this.rowY(0) - 32 - 4, 72, 72, "", currentLocked ? "#ddd" : "White", "", currentLocked ? this.t("item.locked.tip") : this.t("item.delete.tip"), currentLocked);
         (_b = (_a = this.root).DrawImageResize) == null ? void 0 : _b.call(_a, "Icons/Trash.png", 1180, this.rowY(0) - 32, 64, 64);
       } else {
         this.root.DrawTextFit(this.t("item.empty"), 780, this.rowY(0), 600, "#CBC3E3", "Black");
@@ -1730,11 +1861,11 @@
       (_d = (_c = this.root).DrawImageResize) == null ? void 0 : _d.call(_c, "Icons/Plus.png", 1340, this.rowY(0) - 32, 64, 64);
       this.root.MainCanvas.textAlign = "left";
       if (current) {
-        this.positionTextInput(NAME_INPUT_ID, 2, this.t("item.name"), this.t("item.name.tip"), 600);
-        this.drawCheckbox(3, this.t("item.enabled"), this.t("item.enabled.tip"), current.enabled);
-        this.drawCheckbox(4, this.t("item.selfOnly"), this.t("item.selfOnly.tip"), current.selfOnly);
+        this.positionTextInput(NAME_INPUT_ID, 2, this.t("item.name"), currentLocked ? this.t("item.locked.tip") : this.t("item.name.tip"), 600);
+        this.drawCheckbox(3, this.t("item.enabled"), currentLocked ? this.t("item.locked.tip") : this.t("item.enabled.tip"), current.enabled, currentLocked);
+        this.drawCheckbox(4, this.t("item.selfOnly"), currentLocked ? this.t("item.locked.tip") : this.t("item.selfOnly.tip"), current.selfOnly, currentLocked);
         this.drawLabel(5, this.t("item.rulesUpdated", { rules: current.payload.r.length, updated: this.formatDate(current.updatedAt) }));
-        this.drawRowButton(6, this.t("item.edit"), this.t("item.edit.tip"));
+        this.drawRowButton(6, this.t("item.edit"), currentLocked ? this.t("item.locked.tip") : this.t("item.edit.tip"), currentLocked);
       } else {
         this.hideElement(NAME_INPUT_ID);
         this.drawLabel(2, this.t("item.createFirst"));
@@ -1745,13 +1876,14 @@
       var _a, _b, _c, _d;
       super.click();
       const current = this.currentEntry;
+      const currentLocked = current ? !canModifyRegisteredItem(this.root, this.settingsStore.get(), current.itemName) : false;
       if (current && this.root.MouseIn(550, this.rowY(0) - 32, 600, 64)) {
         this.saveCurrent();
         this.index = this.getNewIndexFromNextPrevClick(850, this.index, this.entries.length);
         this.loadCurrentIntoElements();
         return;
       }
-      if (current && this.root.MouseIn(1180, this.rowY(0) - 32, 64, 64)) {
+      if (current && !currentLocked && this.root.MouseIn(1180, this.rowY(0) - 32, 64, 64)) {
         deleteRegisteredItem(this.root, current.itemName);
         this.synchronizer.scheduleSync("settings-item-delete");
         this.reloadEntries();
@@ -1767,21 +1899,21 @@
         this.loadCurrentIntoElements();
         return;
       }
-      if (current && this.checkboxClicked(3)) {
+      if (current && !currentLocked && this.checkboxClicked(3)) {
         updateRegisteredItem(this.root, current.itemName, { enabled: !current.enabled });
         this.synchronizer.scheduleSync("settings-item-toggle");
         this.reloadEntries();
         this.loadCurrentIntoElements();
         return;
       }
-      if (current && this.checkboxClicked(4)) {
+      if (current && !currentLocked && this.checkboxClicked(4)) {
         updateRegisteredItem(this.root, current.itemName, { selfOnly: !current.selfOnly });
         this.synchronizer.scheduleSync("settings-item-self-only");
         this.reloadEntries();
         this.loadCurrentIntoElements();
         return;
       }
-      if (current && this.rowButtonClicked(6)) {
+      if (current && !currentLocked && this.rowButtonClicked(6)) {
         this.saveCurrent();
         const itemName = ((_a = this.currentEntry) == null ? void 0 : _a.itemName) || current.itemName;
         void ((_b = this.authoring) == null ? void 0 : _b.open({ itemName, returnTo: "settingsItemRules" }));
@@ -1813,6 +1945,7 @@
     saveCurrent() {
       const current = this.currentEntry;
       if (!current) return;
+      if (!canModifyRegisteredItem(this.root, this.settingsStore.get(), current.itemName)) return;
       const itemName = this.elementValue(NAME_INPUT_ID).trim();
       if (!itemName || itemName === current.itemName) return;
       const updated = updateRegisteredItem(this.root, current.itemName, { itemName });
@@ -1852,28 +1985,39 @@
   }
   const ROWS$2 = {
     permissionMode: 0,
-    foreign: 1,
-    respond: 2,
-    request: 3,
-    selector: 4,
-    details: 5,
-    cacheActions: 6,
-    registryActions: 7,
-    settingsActions: 8,
-    back: 9
+    lockWorn: 1,
+    foreign: 2,
+    respond: 3,
+    request: 4,
+    back: 7
   };
   const CACHE_ACTIONS = {
-    deleteEntry: { x: 550, w: 300, labelKey: "runtime.deleteCache", tooltipKey: "runtime.deleteCache.tip" },
-    clearCache: { x: 880, w: 300, labelKey: "runtime.clearCache", tooltipKey: "runtime.clearCache.tip" }
+    deleteEntry: { col: 0, labelKey: "runtime.deleteCache", tooltipKey: "runtime.deleteCache.tip" },
+    clearCache: { col: 1, labelKey: "runtime.clearCache", tooltipKey: "runtime.clearCache.tip" }
   };
   const REGISTRY_ACTIONS = {
-    exportRules: { x: 550, w: 300, labelKey: "runtime.exportRules", tooltipKey: "runtime.exportRules.tip" },
-    importRules: { x: 880, w: 300, labelKey: "runtime.importRules", tooltipKey: "runtime.importRules.tip" }
+    exportRules: { col: 0, labelKey: "runtime.exportRules", tooltipKey: "runtime.exportRules.tip" },
+    importRules: { col: 1, labelKey: "runtime.importRules", tooltipKey: "runtime.importRules.tip" }
   };
   const SETTINGS_ACTIONS = {
-    exportSettings: { x: 550, w: 300, labelKey: "runtime.exportSettings", tooltipKey: "runtime.exportSettings.tip" },
-    importSettings: { x: 880, w: 300, labelKey: "runtime.importSettings", tooltipKey: "runtime.importSettings.tip" }
+    exportSettings: { col: 0, labelKey: "runtime.exportSettings", tooltipKey: "runtime.exportSettings.tip" },
+    importSettings: { col: 1, labelKey: "runtime.importSettings", tooltipKey: "runtime.importSettings.tip" }
   };
+  const LEFT_X$1 = 260;
+  const LEFT_LABEL_W$1 = 420;
+  const LEFT_SELECTOR_X = 700;
+  const LEFT_SELECTOR_W = 280;
+  const LEFT_CHECKBOX_X$1 = 916;
+  const RIGHT_X$1 = 1120;
+  const RIGHT_PANEL_W = 660;
+  const RIGHT_BUTTON_W = 300;
+  const RIGHT_GAP = 40;
+  const RIGHT_SELECTOR_W = RIGHT_PANEL_W;
+  const RIGHT_CACHE_ROW = 0;
+  const RIGHT_CACHE_DETAIL_ROW = 1;
+  const RIGHT_CACHE_ACTION_ROW = 2;
+  const RIGHT_REGISTRY_ACTION_ROW = 4;
+  const RIGHT_SETTINGS_ACTION_ROW = 5;
   class SettingsRuntimeScreen extends SettingsScreen {
     constructor(registry, settingsStore, synchronizer) {
       super(registry);
@@ -1885,30 +2029,39 @@
       return this.t("runtime.title");
     }
     run() {
-      var _a, _b;
       super.run();
       const settings = this.settingsStore.get();
       const cacheEntries = listRuleCacheEntries(this.root);
       const currentCache = cacheEntries[this.cacheIndex] || null;
-      this.drawSelector(
+      const lockActive = isWornItemRuleLockActive(this.root, settings);
+      const currentCacheLocked = currentCache ? !canModifyCacheEntry(this.root, settings, currentCache.cacheKey) : false;
+      this.drawLeftSelector(
         ROWS$2.permissionMode,
         this.t("runtime.permissionMode"),
-        this.t("runtime.permissionMode.tip"),
-        this.permissionModeLabel(settings.rulePermissionMode)
+        lockActive ? this.t("runtime.permissionMode.locked.tip") : this.t("runtime.permissionMode.tip"),
+        this.permissionModeLabel(settings.rulePermissionMode),
+        lockActive
       );
-      this.drawCheckbox(ROWS$2.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
-      this.drawCheckbox(ROWS$2.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
-      this.drawCheckbox(ROWS$2.request, this.t("runtime.request"), this.t("runtime.request.tip"), settings.autoRequestForeignRules, settings.allowForeignItemRules === false);
+      this.drawLeftCheckbox(
+        ROWS$2.lockWorn,
+        this.t("runtime.lockWorn"),
+        lockActive ? this.t("runtime.lockWorn.active.tip") : this.t("runtime.lockWorn.tip"),
+        settings.lockWornItemRules,
+        lockActive
+      );
+      this.drawLeftCheckbox(ROWS$2.foreign, this.t("runtime.foreign"), this.t("runtime.foreign.tip"), settings.allowForeignItemRules);
+      this.drawLeftCheckbox(ROWS$2.respond, this.t("runtime.respond"), this.t("runtime.respond.tip"), settings.respondToRuleRequests);
+      this.drawLeftCheckbox(ROWS$2.request, this.t("runtime.request"), this.t("runtime.request.tip"), settings.autoRequestForeignRules, settings.allowForeignItemRules === false);
       if (currentCache) {
-        (_b = (_a = this.root).DrawBackNextButton) == null ? void 0 : _b.call(_a, 550, this.rowY(ROWS$2.selector) - 32, 700, 64, currentCache.itemName, "White", "", () => this.t("common.previous"), () => this.t("common.next"));
-        this.drawLabel(ROWS$2.details, this.t("runtime.cacheDetails", { crafter: currentCache.crafter, rules: currentCache.payload.r.length }));
-        this.drawCacheActions(Boolean(currentCache));
+        this.drawCacheSelector(currentCache.itemName);
+        this.drawRightLabel(RIGHT_CACHE_DETAIL_ROW, this.t("runtime.cacheDetails", { crafter: currentCache.crafter, rules: currentCache.payload.r.length }));
+        this.drawCacheActions(Boolean(currentCache), currentCacheLocked, hasLockedCacheEntries(this.root, settings));
       } else {
-        this.drawLabel(ROWS$2.selector, this.t("runtime.noCache"));
-        this.drawCacheActions(false);
+        this.drawRightLabel(RIGHT_CACHE_ROW, this.t("runtime.noCache"));
+        this.drawCacheActions(false, false, hasLockedCacheEntries(this.root, settings));
       }
       this.drawImportExportActions();
-      this.drawRowButton(ROWS$2.back, this.t("common.back"), this.t("settings.tooltip.back"));
+      this.drawButton(RIGHT_X$1 + RIGHT_PANEL_W - 300, this.rowY(ROWS$2.back) - 32, 300, 64, this.t("common.back"), this.t("settings.tooltip.back"));
     }
     click() {
       var _a, _b;
@@ -1916,30 +2069,32 @@
       const settings = this.settingsStore.get();
       const cacheEntries = listRuleCacheEntries(this.root);
       const currentCache = cacheEntries[this.cacheIndex] || null;
-      if (this.selectorClicked(ROWS$2.permissionMode)) {
+      const lockActive = isWornItemRuleLockActive(this.root, settings);
+      if (!lockActive && this.leftSelectorClicked(ROWS$2.permissionMode)) {
         this.update({ rulePermissionMode: this.nextPermissionMode(settings.rulePermissionMode, settings.dangerModeEnabled && settings.unlockUseMeMode) });
       }
-      if (this.checkboxClicked(ROWS$2.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
-      if (this.checkboxClicked(ROWS$2.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
-      if (settings.allowForeignItemRules !== false && this.checkboxClicked(ROWS$2.request)) this.update({ autoRequestForeignRules: !settings.autoRequestForeignRules });
-      if (currentCache && this.root.MouseIn(550, this.rowY(ROWS$2.selector) - 32, 700, 64)) {
-        this.cacheIndex = this.getNewIndexFromNextPrevClick(900, this.cacheIndex, cacheEntries.length);
+      if (!lockActive && this.leftCheckboxClicked(ROWS$2.lockWorn)) this.update({ lockWornItemRules: !settings.lockWornItemRules });
+      if (this.leftCheckboxClicked(ROWS$2.foreign)) this.update({ allowForeignItemRules: !settings.allowForeignItemRules });
+      if (this.leftCheckboxClicked(ROWS$2.respond)) this.update({ respondToRuleRequests: !settings.respondToRuleRequests });
+      if (settings.allowForeignItemRules !== false && this.leftCheckboxClicked(ROWS$2.request)) this.update({ autoRequestForeignRules: !settings.autoRequestForeignRules });
+      if (currentCache && this.mouseIn(RIGHT_X$1, this.rowY(RIGHT_CACHE_ROW) - 32, RIGHT_SELECTOR_W, 64)) {
+        this.cacheIndex = this.getNewIndexFromNextPrevClick(this.cacheIndex, cacheEntries.length);
       }
-      if (currentCache && this.actionClicked(ROWS$2.cacheActions, CACHE_ACTIONS.deleteEntry)) {
+      if (currentCache && canModifyCacheEntry(this.root, settings, currentCache.cacheKey) && this.actionClicked(RIGHT_CACHE_ACTION_ROW, CACHE_ACTIONS.deleteEntry)) {
         deleteCachedItemRules(this.root, currentCache.cacheKey);
         this.synchronizer.scheduleSync("runtime-cache-delete");
         this.cacheIndex = 0;
       }
-      if (this.actionClicked(ROWS$2.cacheActions, CACHE_ACTIONS.clearCache) && this.confirm(this.t("runtime.confirm.clearCache"))) {
+      if (!hasLockedCacheEntries(this.root, settings) && this.actionClicked(RIGHT_CACHE_ACTION_ROW, CACHE_ACTIONS.clearCache) && this.confirm(this.t("runtime.confirm.clearCache"))) {
         clearRuleCache(this.root);
         this.synchronizer.scheduleSync("runtime-cache-clear");
         this.cacheIndex = 0;
       }
-      if (this.actionClicked(ROWS$2.registryActions, REGISTRY_ACTIONS.exportRules)) this.copyJson(loadRegistry(this.root));
-      if (this.actionClicked(ROWS$2.registryActions, REGISTRY_ACTIONS.importRules)) this.importRegistry();
-      if (this.actionClicked(ROWS$2.settingsActions, SETTINGS_ACTIONS.exportSettings)) this.copyJson(this.settingsStore.get());
-      if (this.actionClicked(ROWS$2.settingsActions, SETTINGS_ACTIONS.importSettings)) this.importSettings();
-      if (this.rowButtonClicked(ROWS$2.back)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
+      if (this.actionClicked(RIGHT_REGISTRY_ACTION_ROW, REGISTRY_ACTIONS.exportRules)) this.copyJson(loadRegistry(this.root));
+      if (!hasLockedRegistryEntries(this.root, settings) && this.actionClicked(RIGHT_REGISTRY_ACTION_ROW, REGISTRY_ACTIONS.importRules)) this.importRegistry();
+      if (this.actionClicked(RIGHT_SETTINGS_ACTION_ROW, SETTINGS_ACTIONS.exportSettings)) this.copyJson(this.settingsStore.get());
+      if (this.actionClicked(RIGHT_SETTINGS_ACTION_ROW, SETTINGS_ACTIONS.importSettings)) this.importSettings();
+      if (this.mouseIn(RIGHT_X$1 + RIGHT_PANEL_W - 300, this.rowY(ROWS$2.back) - 32, 300, 64)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
     }
     update(patch) {
       this.settingsStore.update(patch);
@@ -1955,21 +2110,84 @@
       const index = modes.indexOf(mode);
       return modes[(index + 1) % modes.length];
     }
-    drawCacheActions(hasCurrentCache) {
-      const y = this.rowY(ROWS$2.cacheActions) - 32;
-      this.drawButton(CACHE_ACTIONS.deleteEntry.x, y, CACHE_ACTIONS.deleteEntry.w, 64, this.t(CACHE_ACTIONS.deleteEntry.labelKey), this.t(CACHE_ACTIONS.deleteEntry.tooltipKey), !hasCurrentCache);
-      this.drawButton(CACHE_ACTIONS.clearCache.x, y, CACHE_ACTIONS.clearCache.w, 64, this.t(CACHE_ACTIONS.clearCache.labelKey), this.t(CACHE_ACTIONS.clearCache.tooltipKey));
+    drawLeftSelector(row, label, description, value, disabled = false) {
+      const y = this.rowY(row);
+      const hovering = this.mouseIn(LEFT_X$1, y - 32, LEFT_SELECTOR_X + LEFT_SELECTOR_W - LEFT_X$1, 64);
+      this.drawTextFitLeft(label, LEFT_X$1, y, LEFT_LABEL_W$1, hovering ? "Red" : "Black", "Gray");
+      if (typeof this.root.DrawBackNextButton === "function") {
+        this.root.DrawBackNextButton(LEFT_SELECTOR_X, y - 32, LEFT_SELECTOR_W, 64, value, disabled ? "#ddd" : "White", "", () => this.t("common.previous"), () => this.t("common.next"), disabled);
+      } else {
+        this.root.DrawButton(LEFT_SELECTOR_X, y - 32, LEFT_SELECTOR_W, 64, value, disabled ? "#ddd" : "White", "", this.t("common.previousNext"), disabled);
+      }
+      if (hovering) this.drawTooltip(description);
+    }
+    drawLeftCheckbox(row, label, description, value, disabled = false) {
+      const y = this.rowY(row);
+      const hovering = this.mouseIn(LEFT_X$1, y - 32, LEFT_CHECKBOX_X$1 + 64 - LEFT_X$1, 64);
+      this.drawTextFitLeft(label, LEFT_X$1, y, LEFT_LABEL_W$1, hovering ? "Red" : "Black", "Gray");
+      this.root.DrawCheckbox(LEFT_CHECKBOX_X$1, y - 32, 64, 64, "", value, disabled);
+      if (hovering) this.drawTooltip(description);
+    }
+    leftSelectorClicked(row) {
+      return this.mouseIn(LEFT_SELECTOR_X, this.rowY(row) - 32, LEFT_SELECTOR_W, 64);
+    }
+    leftCheckboxClicked(row) {
+      return this.mouseIn(LEFT_CHECKBOX_X$1, this.rowY(row) - 32, 64, 64);
+    }
+    drawCacheActions(hasCurrentCache, currentCacheLocked, clearLocked) {
+      const y = this.rowY(RIGHT_CACHE_ACTION_ROW) - 32;
+      this.drawButton(
+        this.actionX(CACHE_ACTIONS.deleteEntry),
+        y,
+        RIGHT_BUTTON_W,
+        64,
+        this.t(CACHE_ACTIONS.deleteEntry.labelKey),
+        currentCacheLocked ? this.t("runtime.lockedCache.tip") : this.t(CACHE_ACTIONS.deleteEntry.tooltipKey),
+        !hasCurrentCache || currentCacheLocked
+      );
+      this.drawButton(
+        this.actionX(CACHE_ACTIONS.clearCache),
+        y,
+        RIGHT_BUTTON_W,
+        64,
+        this.t(CACHE_ACTIONS.clearCache.labelKey),
+        clearLocked ? this.t("runtime.lockedCache.clear.tip") : this.t(CACHE_ACTIONS.clearCache.tooltipKey),
+        clearLocked
+      );
     }
     drawImportExportActions() {
-      const registryY = this.rowY(ROWS$2.registryActions) - 32;
-      const settingsY = this.rowY(ROWS$2.settingsActions) - 32;
-      this.drawButton(REGISTRY_ACTIONS.exportRules.x, registryY, REGISTRY_ACTIONS.exportRules.w, 64, this.t(REGISTRY_ACTIONS.exportRules.labelKey), this.t(REGISTRY_ACTIONS.exportRules.tooltipKey));
-      this.drawButton(REGISTRY_ACTIONS.importRules.x, registryY, REGISTRY_ACTIONS.importRules.w, 64, this.t(REGISTRY_ACTIONS.importRules.labelKey), this.t(REGISTRY_ACTIONS.importRules.tooltipKey));
-      this.drawButton(SETTINGS_ACTIONS.exportSettings.x, settingsY, SETTINGS_ACTIONS.exportSettings.w, 64, this.t(SETTINGS_ACTIONS.exportSettings.labelKey), this.t(SETTINGS_ACTIONS.exportSettings.tooltipKey));
-      this.drawButton(SETTINGS_ACTIONS.importSettings.x, settingsY, SETTINGS_ACTIONS.importSettings.w, 64, this.t(SETTINGS_ACTIONS.importSettings.labelKey), this.t(SETTINGS_ACTIONS.importSettings.tooltipKey));
+      const registryY = this.rowY(RIGHT_REGISTRY_ACTION_ROW) - 32;
+      const settingsY = this.rowY(RIGHT_SETTINGS_ACTION_ROW) - 32;
+      this.drawButton(this.actionX(REGISTRY_ACTIONS.exportRules), registryY, RIGHT_BUTTON_W, 64, this.t(REGISTRY_ACTIONS.exportRules.labelKey), this.t(REGISTRY_ACTIONS.exportRules.tooltipKey));
+      const registryLocked = hasLockedRegistryEntries(this.root, this.settingsStore.get());
+      this.drawButton(
+        this.actionX(REGISTRY_ACTIONS.importRules),
+        registryY,
+        RIGHT_BUTTON_W,
+        64,
+        this.t(REGISTRY_ACTIONS.importRules.labelKey),
+        registryLocked ? this.t("runtime.lockedRegistry.tip") : this.t(REGISTRY_ACTIONS.importRules.tooltipKey),
+        registryLocked
+      );
+      this.drawButton(this.actionX(SETTINGS_ACTIONS.exportSettings), settingsY, RIGHT_BUTTON_W, 64, this.t(SETTINGS_ACTIONS.exportSettings.labelKey), this.t(SETTINGS_ACTIONS.exportSettings.tooltipKey));
+      this.drawButton(this.actionX(SETTINGS_ACTIONS.importSettings), settingsY, RIGHT_BUTTON_W, 64, this.t(SETTINGS_ACTIONS.importSettings.labelKey), this.t(SETTINGS_ACTIONS.importSettings.tooltipKey));
+    }
+    drawCacheSelector(itemName) {
+      const y = this.rowY(RIGHT_CACHE_ROW) - 32;
+      if (typeof this.root.DrawBackNextButton === "function") {
+        this.root.DrawBackNextButton(RIGHT_X$1, y, RIGHT_SELECTOR_W, 64, itemName, "White", "", () => this.t("common.previous"), () => this.t("common.next"));
+      } else {
+        this.root.DrawButton(RIGHT_X$1, y, RIGHT_SELECTOR_W, 64, itemName, "White", "", this.t("common.previousNext"));
+      }
+    }
+    drawRightLabel(row, label) {
+      this.drawTextFitLeft(label, RIGHT_X$1, this.rowY(row), RIGHT_PANEL_W, "Black", "Gray");
     }
     actionClicked(row, action) {
-      return this.mouseIn(action.x, this.rowY(row) - 32, action.w, 64);
+      return this.mouseIn(this.actionX(action), this.rowY(row) - 32, RIGHT_BUTTON_W, 64);
+    }
+    actionX(action) {
+      return RIGHT_X$1 + action.col * (RIGHT_BUTTON_W + RIGHT_GAP);
     }
     importRegistry() {
       const input = this.promptJson(this.t("runtime.prompt.registry"));
@@ -1977,6 +2195,7 @@
       const incoming = normalizeRegistryState(JSON.parse(input));
       const current = loadRegistry(this.root);
       for (const [key, entry] of Object.entries(incoming.entries)) {
+        if (!canModifyRegisteredItem(this.root, this.settingsStore.get(), entry.itemName)) continue;
         if (!current.entries[key]) current.entries[key] = entry;
       }
       saveRegistry(this.root, current);
@@ -1985,7 +2204,7 @@
     importSettings() {
       const input = this.promptJson(this.t("runtime.prompt.settings"));
       if (!input) return;
-      this.settingsStore.save(JSON.parse(input));
+      this.settingsStore.update(JSON.parse(input));
       this.synchronizer.startFallbackTimer();
       this.synchronizer.scheduleSync("settings-import");
     }
@@ -2007,9 +2226,9 @@
     confirm(message) {
       return typeof this.root.confirm === "function" ? this.root.confirm(message) === true : true;
     }
-    getNewIndexFromNextPrevClick(midpoint, currentIndex, listLength) {
+    getNewIndexFromNextPrevClick(currentIndex, listLength) {
       if (listLength <= 0) return 0;
-      return Number(this.root.MouseX) <= midpoint ? (listLength + currentIndex - 1) % listLength : (currentIndex + 1) % listLength;
+      return Number(this.root.MouseX) <= RIGHT_X$1 + RIGHT_SELECTOR_W / 2 ? (listLength + currentIndex - 1) % listLength : (currentIndex + 1) % listLength;
     }
   }
   const ROWS$1 = {
@@ -2062,6 +2281,7 @@
       const sync = this.synchronizer.getDiagnostics();
       const transport = ((_a = this.itemRuleTransport) == null ? void 0 : _a.getDiagnostics()) || {};
       const authoring = (_b = this.authoring) == null ? void 0 : _b.getState();
+      const lockActive = isWornItemRuleLockActive(this.root, settings);
       this.drawLeftLabel(ROWS$1.bcx, this.t("diagnostics.bcx", {
         bcx: this.bcx.canUseBCX() ? this.t("common.available") : this.t("common.unavailable"),
         authoring: (authoring == null ? void 0 : authoring.status) || this.t("common.none")
@@ -2080,7 +2300,13 @@
       this.drawLeftCheckbox(ROWS$1.transport, this.t("diagnostics.transport"), this.t("diagnostics.transport.tip"), settings.showTransportMessages);
       this.drawLeftCheckbox(ROWS$1.debug, this.t("diagnostics.debug"), this.t("diagnostics.debug.tip"), settings.debugLogging);
       this.drawLeftCheckbox(ROWS$1.fallback, this.t("diagnostics.fallback"), this.t("diagnostics.fallback.tip"), settings.fallbackSyncEnabled);
-      this.drawLeftCheckbox(ROWS$1.cachedOffline, this.t("diagnostics.cachedOffline"), this.t("diagnostics.cachedOffline.tip"), settings.allowCachedOfflineCreator);
+      this.drawLeftCheckbox(
+        ROWS$1.cachedOffline,
+        this.t("diagnostics.cachedOffline"),
+        lockActive ? this.t("diagnostics.locked.tip") : this.t("diagnostics.cachedOffline.tip"),
+        settings.allowCachedOfflineCreator,
+        lockActive
+      );
       this.drawActionButtons();
       if ((authoring == null ? void 0 : authoring.status) && authoring.status !== "idle") {
         this.drawActionButton(ACTIONS.report, this.t("diagnostics.cancelAuth"), this.t("diagnostics.cancelAuth.tip"));
@@ -2099,7 +2325,7 @@
         this.settingsStore.update({ fallbackSyncEnabled: !settings.fallbackSyncEnabled });
         this.synchronizer.startFallbackTimer();
       }
-      if (this.leftCheckboxClicked(ROWS$1.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
+      if (!isWornItemRuleLockActive(this.root, settings) && this.leftCheckboxClicked(ROWS$1.cachedOffline) && this.confirm(this.t("diagnostics.confirm.cachedOffline"))) {
         this.settingsStore.update({ allowCachedOfflineCreator: !settings.allowCachedOfflineCreator });
         this.synchronizer.scheduleSync("diagnostics-cached-offline");
       }
@@ -2115,7 +2341,7 @@
       }
       if (this.actionClicked(ACTIONS.back)) (_e = (_d = this.registry).setScreen) == null ? void 0 : _e.call(_d, "main");
       if (this.advancedActionClicked(ADVANCED_ACTIONS.reset) && this.confirm(this.t("diagnostics.confirm.reset"))) this.settingsStore.save(DEFAULT_SETTINGS);
-      if (this.advancedActionClicked(ADVANCED_ACTIONS.deleteRegistry) && this.confirm(this.t("diagnostics.confirm.deleteRules"))) {
+      if (!hasLockedRegistryEntries(this.root, settings) && this.advancedActionClicked(ADVANCED_ACTIONS.deleteRegistry) && this.confirm(this.t("diagnostics.confirm.deleteRules"))) {
         clearRegistry(this.root);
         this.synchronizer.scheduleSync("registry-clear");
       }
@@ -2142,13 +2368,19 @@
     }
     drawAdvancedActions() {
       this.drawActionButton(ADVANCED_ACTIONS.reset, this.t(ADVANCED_ACTIONS.reset.labelKey), this.t(ADVANCED_ACTIONS.reset.tooltipKey));
-      this.drawActionButton(ADVANCED_ACTIONS.deleteRegistry, this.t(ADVANCED_ACTIONS.deleteRegistry.labelKey), this.t(ADVANCED_ACTIONS.deleteRegistry.tooltipKey));
+      const registryLocked = hasLockedRegistryEntries(this.root, this.settingsStore.get());
+      this.drawActionButton(
+        ADVANCED_ACTIONS.deleteRegistry,
+        this.t(ADVANCED_ACTIONS.deleteRegistry.labelKey),
+        registryLocked ? this.t("diagnostics.lockedRegistry.tip") : this.t(ADVANCED_ACTIONS.deleteRegistry.tooltipKey),
+        registryLocked
+      );
       this.drawActionButton(ADVANCED_ACTIONS.disableCleanup, this.t(ADVANCED_ACTIONS.disableCleanup.labelKey), this.t(ADVANCED_ACTIONS.disableCleanup.tooltipKey));
       this.drawActionButton(ADVANCED_ACTIONS.disableSharing, this.t(ADVANCED_ACTIONS.disableSharing.labelKey), this.t(ADVANCED_ACTIONS.disableSharing.tooltipKey));
     }
-    drawActionButton(action, label, tooltip) {
+    drawActionButton(action, label, tooltip, disabled = false) {
       const { x, y } = this.actionRect(action);
-      this.drawButton(x, y, ACTION_W, 64, label, tooltip);
+      this.drawButton(x, y, ACTION_W, 64, label, tooltip, disabled);
     }
     actionClicked(action) {
       const { x, y } = this.actionRect(action);
@@ -2166,14 +2398,14 @@
     drawLeftLabel(row, label, description) {
       const y = this.rowY(row);
       const hovering = this.mouseIn(LEFT_X, y - 32, LEFT_LABEL_W, 64);
-      this.root.DrawTextFit(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.drawTextFitLeft(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
       if (hovering && description) this.drawTooltip(description);
     }
-    drawLeftCheckbox(row, label, description, value) {
+    drawLeftCheckbox(row, label, description, value, disabled = false) {
       const y = this.rowY(row);
       const hovering = this.mouseIn(LEFT_X, y - 32, LEFT_LABEL_W + 64, 64);
-      this.root.DrawTextFit(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
-      this.root.DrawCheckbox(LEFT_CHECKBOX_X, y - 32, 64, 64, "", value, false);
+      this.drawTextFitLeft(label, LEFT_X, y, LEFT_LABEL_W, hovering ? "Red" : "Black", "Gray");
+      this.root.DrawCheckbox(LEFT_CHECKBOX_X, y - 32, 64, 64, "", value, disabled);
       if (hovering) this.drawTooltip(description);
     }
     leftCheckboxClicked(row) {
@@ -2216,34 +2448,40 @@
     run() {
       super.run();
       const settings = this.settingsStore.get();
+      const lockActive = isWornItemRuleLockActive(this.root, settings);
       this.drawLabel(ROWS.intro, this.t("danger.warning"), this.t("danger.warning.tip"));
       this.drawCheckbox(
         ROWS.master,
         this.t("danger.master"),
-        this.t("danger.master.tip"),
-        settings.dangerModeEnabled
+        lockActive ? this.t("danger.locked.tip") : this.t("danger.master.tip"),
+        settings.dangerModeEnabled,
+        lockActive
       );
       this.drawCheckbox(
         ROWS.useMe,
         this.t("danger.useMe"),
-        settings.dangerModeEnabled ? this.t("danger.useMe.tip") : this.t("danger.useMe.disabled.tip"),
+        lockActive ? this.t("danger.locked.tip") : settings.dangerModeEnabled ? this.t("danger.useMe.tip") : this.t("danger.useMe.disabled.tip"),
         settings.unlockUseMeMode,
-        !settings.dangerModeEnabled
+        lockActive || !settings.dangerModeEnabled
       );
       this.drawCheckbox(
         ROWS.replaceInactive,
         this.t("danger.replaceInactive"),
-        settings.dangerModeEnabled ? this.t("danger.replaceInactive.tip") : this.t("danger.replaceInactive.disabled.tip"),
+        lockActive ? this.t("danger.locked.tip") : settings.dangerModeEnabled ? this.t("danger.replaceInactive.tip") : this.t("danger.replaceInactive.disabled.tip"),
         settings.useMeSuspendInactiveConflicts,
-        !settings.dangerModeEnabled
+        lockActive || !settings.dangerModeEnabled
       );
       this.drawLabel(ROWS.summary, this.t("danger.summary"));
       this.drawRowButton(ROWS.back, this.t("common.back"), this.t("settings.tooltip.back"));
     }
     click() {
-      var _a, _b;
+      var _a, _b, _c, _d;
       super.click();
       const settings = this.settingsStore.get();
+      if (isWornItemRuleLockActive(this.root, settings)) {
+        if (this.rowButtonClicked(ROWS.back)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
+        return;
+      }
       if (this.checkboxClicked(ROWS.master)) {
         if (settings.dangerModeEnabled) {
           this.settingsStore.update({
@@ -2270,7 +2508,7 @@
         this.settingsStore.update({ useMeSuspendInactiveConflicts: !settings.useMeSuspendInactiveConflicts });
         this.synchronizer.scheduleSync("danger-replace-inactive");
       }
-      if (this.rowButtonClicked(ROWS.back)) (_b = (_a = this.registry).setScreen) == null ? void 0 : _b.call(_a, "main");
+      if (this.rowButtonClicked(ROWS.back)) (_d = (_c = this.registry).setScreen) == null ? void 0 : _d.call(_c, "main");
     }
     confirm(message) {
       return typeof this.root.confirm === "function" ? this.root.confirm(message) === true : true;
@@ -2349,7 +2587,7 @@
       var _a;
       (_a = this.current) == null ? void 0 : _a.unload();
       if (screenName === "itemRules") {
-        this.current = new SettingsItemRulesScreen(this, this.synchronizer, this.authoring, options.itemName);
+        this.current = new SettingsItemRulesScreen(this, this.settingsStore, this.synchronizer, this.authoring, options.itemName);
       } else if (screenName === "runtime") {
         this.current = new SettingsRuntimeScreen(this, this.settingsStore, this.synchronizer);
       } else if (screenName === "diagnostics") {
@@ -3162,7 +3400,7 @@
     }
   }
   class AuthoringSession {
-    constructor(root, bcx, reporter, synchronizer) {
+    constructor(root, bcx, reporter, synchronizer, settingsStore) {
       __publicField(this, "modApi", null);
       __publicField(this, "status", "idle");
       __publicField(this, "store", null);
@@ -3183,6 +3421,7 @@
       this.bcx = bcx;
       this.reporter = reporter;
       this.synchronizer = synchronizer;
+      this.settingsStore = settingsStore;
       this.characterManager = new VirtualCharacterManager(root);
       this.endpoint = new VirtualBCXEndpoint(root, VIRTUAL_MEMBER_NUMBER, () => this.store);
       this.transport = new VirtualBCXTransport(root, VIRTUAL_MEMBER_NUMBER);
@@ -3276,6 +3515,9 @@
       try {
         const payload = buildAuthoringPayload(this.makePayloadId(), this.store.exportRules());
         const itemName = this.confirmItemName();
+        if (this.settingsStore && !canModifyRegisteredItem(this.root, this.settingsStore.get(), itemName)) {
+          throw new Error("item rules are locked while this item is worn");
+        }
         const entry = registerItemRules(this.root, itemName, payload);
         this.lastRegisteredItem = entry.itemName;
         this.reporter.localMessage("BCXIR rules registered locally for item: " + entry.itemName + ".", "info");
@@ -3488,6 +3730,10 @@
         this.debug("Item rule request skipped; item was crafted by the local player.", { crafter, itemName });
         return null;
       }
+      if (settings && !canRefreshRemoteItemRules(this.root, settings, crafter, itemName)) {
+        this.debug("Item rule request skipped; worn item rule lock is active.", { crafter, itemName });
+        return null;
+      }
       const cacheKey = makeRuleCacheKey(crafter, itemName);
       const cooldown = this.cooldowns.get(cacheKey);
       if (cooldown && cooldown.nextAllowedAt > now()) {
@@ -3612,7 +3858,7 @@
       });
     }
     handleResponse(sender, message) {
-      var _a, _b;
+      var _a, _b, _c;
       this.expirePending();
       const pending = this.pending.get(message.requestId);
       if (!pending) {
@@ -3631,6 +3877,16 @@
         this.debug("Item rule response ignored; missing payload.", { sender, requestId: message.requestId });
         return;
       }
+      const settings = (_a = this.settingsStore) == null ? void 0 : _a.get();
+      if (settings && !canRefreshRemoteItemRules(this.root, settings, sender, pending.itemName)) {
+        this.pending.delete(message.requestId);
+        this.debug("Item rule response ignored; worn item rule lock is active.", {
+          sender,
+          requestId: message.requestId,
+          itemName: pending.itemName
+        });
+        return;
+      }
       if (!isPhraseInItemName(pending.itemName, message.itemName) && !isPhraseInItemName(message.itemName, pending.itemName)) {
         this.debug("Item rule response ignored; item name mismatch.", {
           requestId: message.requestId,
@@ -3643,10 +3899,10 @@
       this.pending.delete(message.requestId);
       this.cooldowns.delete(pending.cacheKey);
       this.debug("Item rule response cached.", { sender, requestId: message.requestId, itemName: pending.itemName });
-      if (((_a = this.settingsStore) == null ? void 0 : _a.get().showTransportMessages) !== false) {
+      if (((_b = this.settingsStore) == null ? void 0 : _b.get().showTransportMessages) !== false) {
         this.reporter.localMessage("Received BCXIR rules for " + pending.itemName + ".", "info");
       }
-      (_b = this.onRulesReceived) == null ? void 0 : _b.call(this);
+      (_c = this.onRulesReceived) == null ? void 0 : _c.call(this);
     }
     sendBeep(target, message) {
       try {
@@ -4146,7 +4402,7 @@
     const itemRuleTransport = new ItemRuleTransport(root, reporter, settingsStore);
     const synchronizer = new RuleSynchronizer(root, bcx, reporter, settingsStore, itemRuleTransport);
     itemRuleTransport.setRulesReceivedCallback(() => synchronizer.scheduleSync("item-rule-response"));
-    const authoring = new AuthoringSession(root, bcx, reporter, synchronizer);
+    const authoring = new AuthoringSession(root, bcx, reporter, synchronizer, settingsStore);
     const settingsRegistry = new SettingsRegistry(root, settingsStore, bcx, synchronizer, authoring, itemRuleTransport);
     authoring.setSettingsItemRulesRestore((itemName) => settingsRegistry.restoreItemRules(itemName));
     let settingsInitialized = false;
