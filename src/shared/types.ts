@@ -161,6 +161,26 @@ export interface RegistryState {
   entries: Record<string, RegistryEntry>;
 }
 
+export interface RegistryTombstone {
+  itemName: string;
+  deletedAt: number;
+  updatedAt: number;
+}
+
+export interface CloudDocument {
+  v: 1;
+  settings?: Partial<BCXIRSettings>;
+  registry?: RegistryState;
+  registryTombstones?: Record<string, RegistryTombstone>;
+  activeItemPayloads?: Record<string, ActiveItemPayloadState>;
+  managed?: Record<string, ManagedRuleState>;
+  targetManaged?: Record<string, TargetManagedRuleState>;
+  meta?: {
+    updatedAt: number;
+    deviceId: string;
+  };
+}
+
 export interface RuleCacheEntry {
   cacheKey: string;
   crafter: number;

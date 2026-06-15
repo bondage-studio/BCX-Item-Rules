@@ -1293,4 +1293,235 @@ assert.deepEqual(bcxTargetRuleConditions.get(33333), {});
   assert.equal(session2.BCXItemRules.getSettings().enabled, false);
 }
 
+{
+  const sharedExtensionSettings = {};
+  const sharedPlayerRules = {};
+  const sharedTargetRules = new Map();
+  const sharedVersions = new Map();
+  const memberNumber = 246810;
+
+  const buildDevice = (label, localStore = new Map()) => {
+    const deviceTimers = [];
+    const deviceHooks = new Map();
+    const modApi = {
+      hookFunction(name, _priority, callback) {
+        const list = deviceHooks.get(name) || [];
+        list.push(callback);
+        deviceHooks.set(name, list);
+      },
+    };
+    const getConditions = (target) => {
+      if (target === undefined || target === "Player" || target === memberNumber) return sharedPlayerRules;
+      if (!sharedTargetRules.has(target)) sharedTargetRules.set(target, {});
+      return sharedTargetRules.get(target);
+    };
+    const win = {
+      LZString: fakeLz,
+      localStorage: {
+        getItem: (key) => localStore.get(key) || null,
+        setItem: (key, value) => localStore.set(key, value),
+        removeItem: (key) => localStore.delete(key),
+      },
+      Player: {
+        MemberNumber: memberNumber,
+        ExtensionSettings: sharedExtensionSettings.BCXIR ? { BCXIR: sharedExtensionSettings.BCXIR } : {},
+        Appearance: [],
+      },
+      ChatRoomCharacter: [],
+      bcModSdk: { registerMod() { return modApi; } },
+      bcx: {
+        version: "test",
+        getCharacterVersion(target) { return sharedVersions.get(target) || null; },
+        getModApi() {
+          return {
+            sendQuery(type, data, target = "Player") {
+              const conditions = getConditions(target);
+              if (type === "conditionsGet") return Promise.resolve({ conditions: clone(conditions) });
+              if (type === "ruleCreate") {
+                if (!conditions[data]) {
+                  conditions[data] = {
+                    active: true,
+                    favorite: false,
+                    timer: null,
+                    timerRemove: false,
+                    requirements: null,
+                    data: { enforce: true, log: true },
+                    ...(target !== "Player" ? { addedBy: memberNumber } : {}),
+                  };
+                }
+                return Promise.resolve(true);
+              }
+              if (type === "conditionUpdate") {
+                const previous = conditions[data.condition] || {};
+                conditions[data.condition] = {
+                  ...clone(data.data),
+                  ...(previous.addedBy !== undefined ? { addedBy: previous.addedBy } : {}),
+                };
+                return Promise.resolve(true);
+              }
+              if (type === "ruleDelete") {
+                delete conditions[data];
+                return Promise.resolve(true);
+              }
+              return Promise.resolve(true);
+            },
+            getRuleState() { return true; },
+          };
+        },
+      },
+      setTimeout(callback) {
+        deviceTimers.push(callback);
+        return deviceTimers.length;
+      },
+      clearTimeout() {},
+      setInterval() {},
+      ServerSend() {},
+      ServerPlayerExtensionSettingsSync(key) {
+        sharedExtensionSettings[key] = win.Player.ExtensionSettings[key];
+      },
+      PreferenceRegisterExtensionSetting() {},
+      document: { getElementById: () => null, body: { appendChild() {} }, createElement: () => ({ style: { setProperty() {} }, addEventListener() {}, remove() {} }) },
+      navigator: {},
+      prompt: (_message, value) => value || "",
+      __label: label,
+      __timers: deviceTimers,
+    };
+    win.window = win;
+    const deviceContext = { console, Date: FakeDate, window: win, LZString: fakeLz };
+    deviceContext.unsafeWindow = win;
+    deviceContext.globalThis = win;
+    vm.createContext(deviceContext);
+    vm.runInContext(source, deviceContext);
+    return { win, api: win.BCXItemRules, localStore, timers: deviceTimers };
+  };
+
+  const fireDeviceTimers = async (device, max = 50) => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    let count = 0;
+    while (device.timers.length && count < max) {
+      device.timers.shift()();
+      count += 1;
+      for (let i = 0; i < 2; i++) await Promise.resolve();
+    }
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  };
+
+  const syncDevice = async (device, reason) => {
+    let settled = false;
+    const promise = Promise.resolve(device.api.syncNow(reason)).finally(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 100 && !settled; i++) {
+      await fireDeviceTimers(device, 20);
+      await Promise.resolve();
+    }
+    assert.equal(settled, true, "device sync did not settle: " + reason);
+    return promise;
+  };
+
+  const deviceA = buildDevice("A");
+  await fireDeviceTimers(deviceA);
+  deviceA.api.registerItemRules("Cloud Collar", {
+    v: 1,
+    id: "cloud-collar",
+    r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "cloud" }, p: 1 }],
+  });
+  assert.equal(sharedExtensionSettings.BCXIR != null, true);
+
+  const deviceB = buildDevice("B");
+  await fireDeviceTimers(deviceB);
+  assert.equal(deviceB.api.getRegistry().some((entry) => entry.itemName === "Cloud Collar"), true);
+  assert.equal(deviceB.api.getRuleCache().length, 0);
+
+  deviceA.localStore.set("BCXIR_rule_cache_" + memberNumber, JSON.stringify({
+    v: 1,
+    entries: {
+      "99999:cache only": {
+        cacheKey: "99999:cache only",
+        crafter: 99999,
+        itemName: "Cache Only",
+        payload: { v: 1, id: "cache-only", r: [{ k: "alt_restrict_sight", e: 1, l: 1, q: null, t: null, tr: 0, p: 0 }] },
+        updatedAt: currentTime,
+      },
+    },
+  }));
+  assert.equal(deviceA.api.getRuleCache().length, 1);
+  assert.equal(deviceB.api.getRuleCache().length, 0);
+
+  deviceA.win.Player.Appearance = [{
+    Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+    Craft: { Name: "Cloud Collar", MemberNumber: memberNumber },
+  }];
+  await syncDevice(deviceA, "cloud-managed-apply");
+  assert.equal(sharedPlayerRules.alt_restrict_sight.data.customData.blindnessStrength, "cloud");
+  const deviceC = buildDevice("C");
+  await fireDeviceTimers(deviceC);
+  deviceC.win.Player.Appearance = [];
+  await syncDevice(deviceC, "cloud-managed-cleanup");
+  assert.equal(sharedPlayerRules.alt_restrict_sight, undefined);
+  deviceA.win.Player.ExtensionSettings = { BCXIR: sharedExtensionSettings.BCXIR };
+
+  deviceA.api.registerItemRules("Cloud Restore", {
+    v: 1,
+    id: "cloud-restore",
+    r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "cloud-restore" }, p: 2 }],
+  });
+  sharedPlayerRules.alt_restrict_sight = {
+    active: false,
+    favorite: false,
+    timer: null,
+    timerRemove: false,
+    requirements: null,
+    data: { enforce: true, log: true, customData: { blindnessStrength: "existing-cloud" } },
+  };
+  deviceA.api.updateSettings({ dangerModeEnabled: true, useMeSuspendInactiveConflicts: true, rulePermissionMode: "self" });
+  deviceA.win.Player.Appearance = [{
+    Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+    Craft: { Name: "Cloud Restore", MemberNumber: memberNumber },
+  }];
+  await syncDevice(deviceA, "cloud-restore-apply");
+  assert.equal(sharedPlayerRules.alt_restrict_sight.data.customData.blindnessStrength, "cloud-restore");
+  const deviceD = buildDevice("D");
+  await fireDeviceTimers(deviceD);
+  deviceD.win.Player.Appearance = [];
+  await syncDevice(deviceD, "cloud-restore-cleanup");
+  assert.equal(sharedPlayerRules.alt_restrict_sight.active, false);
+  assert.equal(sharedPlayerRules.alt_restrict_sight.data.customData.blindnessStrength, "existing-cloud");
+
+  deviceA.api.registerItemRules("Cloud Target", {
+    v: 1,
+    id: "cloud-target",
+    r: [{ k: "alt_restrict_sight", d: { blindnessStrength: "target-cloud" }, p: 1 }],
+  });
+  sharedVersions.set(55555, "test");
+  deviceA.api.updateSettings({
+    applyMyRulesToNonPluginUsers: true,
+    removeMyRulesFromNonPluginUsers: false,
+  });
+  deviceA.win.ChatRoomCharacter = [{
+    MemberNumber: 55555,
+    Appearance: [
+      { Asset: { Name: "Collar", Group: { Name: "ItemNeck", Category: "Item" } }, Craft: { Name: "Cloud Target", MemberNumber: memberNumber } },
+    ],
+  }];
+  await syncDevice(deviceA, "cloud-target-apply");
+  assert.equal(sharedTargetRules.get(55555).alt_restrict_sight.data.customData.blindnessStrength, "target-cloud");
+  const deviceE = buildDevice("E");
+  await fireDeviceTimers(deviceE);
+  deviceE.api.updateSettings({
+    applyMyRulesToNonPluginUsers: false,
+    removeMyRulesFromNonPluginUsers: true,
+  });
+  deviceE.win.ChatRoomCharacter = [{ MemberNumber: 55555, Appearance: [] }];
+  await syncDevice(deviceE, "cloud-target-cleanup");
+  assert.equal(sharedTargetRules.get(55555).alt_restrict_sight, undefined);
+
+  const deviceF = buildDevice("F");
+  await fireDeviceTimers(deviceF);
+  assert.equal(deviceF.api.getRegistry().some((entry) => entry.itemName === "Cloud Collar"), true);
+  assert.equal(deviceA.api.deleteRegisteredItem("Cloud Collar"), true);
+  deviceF.win.Player.ExtensionSettings = { BCXIR: sharedExtensionSettings.BCXIR };
+  assert.equal(deviceF.api.getRegistry().some((entry) => entry.itemName === "Cloud Collar"), false);
+}
+
 console.log("BCXIR core tests passed");

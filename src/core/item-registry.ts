@@ -8,11 +8,15 @@ import type {
   NormalizedPayload,
   RegistryEntry,
   RegistryState,
+  RegistryTombstone,
   RuleCacheEntry,
   RuleCacheState,
 } from "../shared/types";
-import { deepClone, isPlainObject, now } from "../shared/utils";
+import { deepClone, isPlainObject, now, stableStringify } from "../shared/utils";
 import { normalizePayload } from "./protocol";
+import { readCloudDocument, saveCloudDocument } from "../shared/cloud-document";
+
+const REGISTRY_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function normalizeItemName(name: unknown): string {
   return typeof name === "string" ? name.trim().replace(/\s+/g, " ").toLocaleLowerCase() : "";
@@ -96,6 +100,89 @@ export function normalizeRegistryState(value: unknown): RegistryState {
   return out;
 }
 
+function normalizeRegistryTombstones(value: unknown): Record<string, RegistryTombstone> {
+  const out: Record<string, RegistryTombstone> = {};
+  if (!isPlainObject(value)) return out;
+  for (const [key, raw] of Object.entries(value)) {
+    if (!isPlainObject(raw)) continue;
+    const normalizedKey = normalizeItemName(key);
+    const itemName = typeof raw.itemName === "string" && raw.itemName.trim()
+      ? raw.itemName.trim()
+      : normalizedKey;
+    const deletedAt = Number(raw.deletedAt);
+    const updatedAt = Number(raw.updatedAt);
+    if (!normalizedKey || !Number.isFinite(deletedAt) || !Number.isFinite(updatedAt)) continue;
+    out[normalizedKey] = { itemName, deletedAt, updatedAt };
+  }
+  return out;
+}
+
+function mergeRegistryStates(
+  local: RegistryState,
+  cloud: RegistryState,
+  tombstones: Record<string, RegistryTombstone>,
+): RegistryState {
+  const out: RegistryState = { v: 1, entries: {} };
+  for (const [key, entry] of Object.entries(local.entries)) out.entries[key] = deepClone(entry);
+  for (const [key, entry] of Object.entries(cloud.entries)) {
+    const previous = out.entries[key];
+    if (!previous || entry.updatedAt > previous.updatedAt) out.entries[key] = deepClone(entry);
+  }
+  for (const [key, tombstone] of Object.entries(tombstones)) {
+    const entry = out.entries[key];
+    if (entry && tombstone.updatedAt >= entry.updatedAt) delete out.entries[key];
+  }
+  return out;
+}
+
+function saveRegistryWithTombstones(
+  root: HostWindow,
+  state: RegistryState,
+  incomingTombstones: Record<string, RegistryTombstone>,
+  memberNumber: number | null,
+): void {
+  if (memberNumber == null) return;
+  const cloud = readCloudDocument(root);
+  const tombstones = pruneRegistryTombstones({
+    ...normalizeRegistryTombstones(cloud.registryTombstones),
+    ...incomingTombstones,
+  });
+  const merged = mergeRegistryStates(
+    normalizeRegistryState(state),
+    normalizeRegistryState(cloud.registry),
+    tombstones,
+  );
+  for (const [key, entry] of Object.entries(merged.entries)) {
+    const tombstone = tombstones[key];
+    if (tombstone && entry.updatedAt > tombstone.updatedAt) delete tombstones[key];
+  }
+  writeJsonState(root, getRegistryStorageKey(memberNumber), merged);
+  saveCloudDocument(root, {
+    registry: merged,
+    registryTombstones: tombstones,
+  }, { replace: ["registry", "registryTombstones"] });
+}
+
+function pruneRegistryTombstones(
+  tombstones: Record<string, RegistryTombstone>,
+): Record<string, RegistryTombstone> {
+  const cutoff = now() - REGISTRY_TOMBSTONE_TTL_MS;
+  const out: Record<string, RegistryTombstone> = {};
+  for (const [key, tombstone] of Object.entries(tombstones)) {
+    if (tombstone.deletedAt >= cutoff) out[key] = tombstone;
+  }
+  return out;
+}
+
+function makeRegistryTombstone(itemName: string): RegistryTombstone {
+  const timestamp = now();
+  return {
+    itemName,
+    deletedAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
 function readJsonState(root: HostWindow, key: string): unknown {
   const raw = root.localStorage?.getItem(key);
   if (!raw) return null;
@@ -109,7 +196,15 @@ function writeJsonState(root: HostWindow, key: string, value: unknown): void {
 export function loadRegistry(root: HostWindow, memberNumber = getPlayerMemberNumber(root)): RegistryState {
   if (memberNumber == null) return { v: 1, entries: {} };
   try {
-    return normalizeRegistryState(readJsonState(root, getRegistryStorageKey(memberNumber)));
+    const local = normalizeRegistryState(readJsonState(root, getRegistryStorageKey(memberNumber)));
+    const cloud = readCloudDocument(root);
+    const cloudRegistry = normalizeRegistryState(cloud.registry);
+    const tombstones = normalizeRegistryTombstones(cloud.registryTombstones);
+    const merged = mergeRegistryStates(local, cloudRegistry, tombstones);
+    if (stableStringify(local) !== stableStringify(merged)) {
+      writeJsonState(root, getRegistryStorageKey(memberNumber), merged);
+    }
+    return merged;
   } catch (error) {
     console.warn("[BCXIR] Failed to load local item rule registry; using empty registry.", error);
     return { v: 1, entries: {} };
@@ -122,7 +217,7 @@ export function saveRegistry(
   memberNumber = getPlayerMemberNumber(root),
 ): void {
   if (memberNumber == null) return;
-  writeJsonState(root, getRegistryStorageKey(memberNumber), normalizeRegistryState(state));
+  saveRegistryWithTombstones(root, normalizeRegistryState(state), {}, memberNumber);
 }
 
 export function listRegistryEntries(root: HostWindow, memberNumber = getPlayerMemberNumber(root)): RegistryEntry[] {
@@ -197,14 +292,22 @@ export function deleteRegisteredItem(
   const state = loadRegistry(root, memberNumber);
   const key = normalizeItemName(itemName);
   if (!state.entries[key]) return false;
+  const removed = state.entries[key];
   delete state.entries[key];
-  saveRegistry(root, state, memberNumber);
+  saveRegistryWithTombstones(root, state, {
+    [key]: makeRegistryTombstone(removed.itemName || itemName),
+  }, memberNumber);
   return true;
 }
 
 export function clearRegistry(root: HostWindow, memberNumber = getPlayerMemberNumber(root)): void {
   if (memberNumber == null) return;
-  root.localStorage?.removeItem(getRegistryStorageKey(memberNumber));
+  const state = loadRegistry(root, memberNumber);
+  const tombstones: Record<string, RegistryTombstone> = {};
+  for (const [key, entry] of Object.entries(state.entries)) {
+    tombstones[key] = makeRegistryTombstone(entry.itemName);
+  }
+  saveRegistryWithTombstones(root, { v: 1, entries: {} }, tombstones, memberNumber);
 }
 
 export function findMatchingRegistryEntry(

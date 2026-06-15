@@ -359,6 +359,152 @@
     const memberNumber = Number(value);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
   }
+  function decodeExtensionSettingsRaw(root, raw) {
+    if (typeof raw !== "string" || !raw) return null;
+    const lz = getLz(root);
+    if (!lz) throw new Error("LZString base64 codec is unavailable");
+    const json = lz.decompressFromBase64(raw);
+    if (!json) throw new Error("extension settings decompression failed");
+    return JSON.parse(json);
+  }
+  function encodeExtensionSettingsRaw(root, value) {
+    const lz = getLz(root);
+    if (!lz) throw new Error("LZString base64 codec is unavailable");
+    const encoded = lz.compressToBase64(JSON.stringify(value));
+    if (typeof encoded !== "string" || !encoded) throw new Error("extension settings compression failed");
+    return encoded;
+  }
+  function getLz(root) {
+    const lz = root.LZString || globalThis.LZString;
+    if (lz && typeof lz.compressToBase64 === "function" && typeof lz.decompressFromBase64 === "function") {
+      return lz;
+    }
+    return null;
+  }
+  const DEVICE_ID_KEY = "BCXIR_device_id";
+  function getPlayerNumber(root) {
+    const value = root.Player && root.Player.MemberNumber;
+    return value == null ? "DEFAULT" : String(value);
+  }
+  function getSettingsBackupKey(root) {
+    return SETTINGS_BACKUP_PREFIX + getPlayerNumber(root) + "_backup";
+  }
+  function readCloudDocument(root) {
+    var _a, _b, _c;
+    for (const raw of [
+      (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY],
+      (_c = root.localStorage) == null ? void 0 : _c.getItem(getSettingsBackupKey(root))
+    ]) {
+      try {
+        const decoded = decodeExtensionSettingsRaw(root, raw);
+        const normalized = normalizeCloudDocument(decoded);
+        if (normalized) return normalized;
+      } catch {
+      }
+    }
+    return emptyCloudDocument();
+  }
+  function saveCloudDocument(root, patch, options = {}) {
+    var _a, _b;
+    const current = readCloudDocument(root);
+    const next = mergeCloudDocument(current, normalizeCloudDocument(patch) || emptyCloudDocument(), options);
+    next.meta = {
+      updatedAt: Date.now(),
+      deviceId: getDeviceId(root)
+    };
+    const encoded = encodeExtensionSettingsRaw(root, next);
+    (_a = root.Player).ExtensionSettings || (_a.ExtensionSettings = {});
+    root.Player.ExtensionSettings[SETTINGS_EXTENSION_KEY] = encoded;
+    (_b = root.localStorage) == null ? void 0 : _b.setItem(getSettingsBackupKey(root), encoded);
+    if (typeof root.ServerPlayerExtensionSettingsSync === "function") {
+      root.ServerPlayerExtensionSettingsSync(SETTINGS_EXTENSION_KEY);
+    }
+    return deepClone(next);
+  }
+  function normalizeCloudDocument(value) {
+    if (!isPlainObject(value)) return null;
+    const out = emptyCloudDocument();
+    out.settings = isPlainObject(value.settings) ? deepClone(value.settings) : looksLikeLegacySettings(value) ? deepClone(value) : void 0;
+    out.registry = normalizeRegistry(value.registry);
+    out.registryTombstones = normalizeRegistryTombstones$1(value.registryTombstones);
+    out.activeItemPayloads = isPlainObject(value.activeItemPayloads) ? deepClone(value.activeItemPayloads) : void 0;
+    out.managed = isPlainObject(value.managed) ? deepClone(value.managed) : void 0;
+    out.targetManaged = isPlainObject(value.targetManaged) ? deepClone(value.targetManaged) : void 0;
+    if (isPlainObject(value.meta)) {
+      out.meta = {
+        updatedAt: Number.isFinite(Number(value.meta.updatedAt)) ? Number(value.meta.updatedAt) : 0,
+        deviceId: typeof value.meta.deviceId === "string" ? value.meta.deviceId : ""
+      };
+    }
+    return out;
+  }
+  function emptyCloudDocument() {
+    return { v: 1 };
+  }
+  function mergeCloudDocument(current, patch, options) {
+    const replace = new Set(options.replace || []);
+    const next = { v: 1 };
+    next.settings = patch.settings !== void 0 ? deepClone(patch.settings) : deepClone(current.settings);
+    next.registry = replace.has("registry") ? deepClone(patch.registry) : mergeUpdatedEntries(current.registry, patch.registry, "entries");
+    next.registryTombstones = replace.has("registryTombstones") ? deepClone(patch.registryTombstones) : mergeUpdatedMaps(current.registryTombstones, patch.registryTombstones);
+    next.activeItemPayloads = replace.has("activeItemPayloads") ? deepClone(patch.activeItemPayloads) : mergeUpdatedMaps(current.activeItemPayloads, patch.activeItemPayloads);
+    next.managed = replace.has("managed") ? deepClone(patch.managed) : mergeUpdatedMaps(current.managed, patch.managed);
+    next.targetManaged = replace.has("targetManaged") ? deepClone(patch.targetManaged) : mergeUpdatedMaps(current.targetManaged, patch.targetManaged);
+    return stripEmptyCloudDocument(next);
+  }
+  function mergeUpdatedEntries(current, patch, key) {
+    const merged = mergeUpdatedMaps(current == null ? void 0 : current[key], patch == null ? void 0 : patch[key]);
+    return merged ? { v: 1, entries: merged } : void 0;
+  }
+  function mergeUpdatedMaps(current, patch) {
+    if (current === void 0 && patch === void 0) return void 0;
+    const out = {};
+    for (const [key, value] of Object.entries(current || {})) out[key] = deepClone(value);
+    for (const [key, value] of Object.entries(patch || {})) {
+      const previous = out[key];
+      if (!previous || Number(value.updatedAt || 0) >= Number(previous.updatedAt || 0)) {
+        out[key] = deepClone(value);
+      }
+    }
+    return out;
+  }
+  function stripEmptyCloudDocument(document) {
+    const next = deepClone(document);
+    return next;
+  }
+  function normalizeRegistry(value) {
+    if (!isPlainObject(value) || !isPlainObject(value.entries)) return void 0;
+    return { v: 1, entries: deepClone(value.entries) };
+  }
+  function normalizeRegistryTombstones$1(value) {
+    if (!isPlainObject(value)) return void 0;
+    const out = {};
+    for (const [key, raw] of Object.entries(value)) {
+      if (!isPlainObject(raw)) continue;
+      const itemName = typeof raw.itemName === "string" ? raw.itemName.trim() : key;
+      const updatedAt = Number(raw.updatedAt);
+      const deletedAt = Number(raw.deletedAt);
+      if (!itemName || !Number.isFinite(updatedAt) || !Number.isFinite(deletedAt)) continue;
+      out[key] = { itemName, updatedAt, deletedAt };
+    }
+    return Object.keys(out).length ? out : void 0;
+  }
+  function looksLikeLegacySettings(value) {
+    return value.v === 1 && ("enabled" in value || "rulePermissionMode" in value || "allowForeignItemRules" in value || "respondToRuleRequests" in value);
+  }
+  function getDeviceId(root) {
+    var _a, _b;
+    const existing = (_a = root.localStorage) == null ? void 0 : _a.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const next = [
+      "bcxir",
+      String(Date.now()),
+      String(Math.floor(Math.random() * 1e9))
+    ].join("-");
+    (_b = root.localStorage) == null ? void 0 : _b.setItem(DEVICE_ID_KEY, next);
+    return next;
+  }
+  const REGISTRY_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
   function normalizeItemName(name) {
     return typeof name === "string" ? name.trim().replace(/\s+/g, " ").toLocaleLowerCase() : "";
   }
@@ -430,6 +576,71 @@
     }
     return out;
   }
+  function normalizeRegistryTombstones(value) {
+    const out = {};
+    if (!isPlainObject(value)) return out;
+    for (const [key, raw] of Object.entries(value)) {
+      if (!isPlainObject(raw)) continue;
+      const normalizedKey = normalizeItemName(key);
+      const itemName = typeof raw.itemName === "string" && raw.itemName.trim() ? raw.itemName.trim() : normalizedKey;
+      const deletedAt = Number(raw.deletedAt);
+      const updatedAt = Number(raw.updatedAt);
+      if (!normalizedKey || !Number.isFinite(deletedAt) || !Number.isFinite(updatedAt)) continue;
+      out[normalizedKey] = { itemName, deletedAt, updatedAt };
+    }
+    return out;
+  }
+  function mergeRegistryStates(local, cloud, tombstones) {
+    const out = { v: 1, entries: {} };
+    for (const [key, entry] of Object.entries(local.entries)) out.entries[key] = deepClone(entry);
+    for (const [key, entry] of Object.entries(cloud.entries)) {
+      const previous = out.entries[key];
+      if (!previous || entry.updatedAt > previous.updatedAt) out.entries[key] = deepClone(entry);
+    }
+    for (const [key, tombstone] of Object.entries(tombstones)) {
+      const entry = out.entries[key];
+      if (entry && tombstone.updatedAt >= entry.updatedAt) delete out.entries[key];
+    }
+    return out;
+  }
+  function saveRegistryWithTombstones(root, state, incomingTombstones, memberNumber) {
+    if (memberNumber == null) return;
+    const cloud = readCloudDocument(root);
+    const tombstones = pruneRegistryTombstones({
+      ...normalizeRegistryTombstones(cloud.registryTombstones),
+      ...incomingTombstones
+    });
+    const merged = mergeRegistryStates(
+      normalizeRegistryState(state),
+      normalizeRegistryState(cloud.registry),
+      tombstones
+    );
+    for (const [key, entry] of Object.entries(merged.entries)) {
+      const tombstone = tombstones[key];
+      if (tombstone && entry.updatedAt > tombstone.updatedAt) delete tombstones[key];
+    }
+    writeJsonState(root, getRegistryStorageKey(memberNumber), merged);
+    saveCloudDocument(root, {
+      registry: merged,
+      registryTombstones: tombstones
+    }, { replace: ["registry", "registryTombstones"] });
+  }
+  function pruneRegistryTombstones(tombstones) {
+    const cutoff = now() - REGISTRY_TOMBSTONE_TTL_MS;
+    const out = {};
+    for (const [key, tombstone] of Object.entries(tombstones)) {
+      if (tombstone.deletedAt >= cutoff) out[key] = tombstone;
+    }
+    return out;
+  }
+  function makeRegistryTombstone(itemName) {
+    const timestamp = now();
+    return {
+      itemName,
+      deletedAt: timestamp,
+      updatedAt: timestamp
+    };
+  }
   function readJsonState(root, key) {
     var _a;
     const raw = (_a = root.localStorage) == null ? void 0 : _a.getItem(key);
@@ -443,7 +654,15 @@
   function loadRegistry(root, memberNumber = getPlayerMemberNumber(root)) {
     if (memberNumber == null) return { v: 1, entries: {} };
     try {
-      return normalizeRegistryState(readJsonState(root, getRegistryStorageKey(memberNumber)));
+      const local = normalizeRegistryState(readJsonState(root, getRegistryStorageKey(memberNumber)));
+      const cloud = readCloudDocument(root);
+      const cloudRegistry = normalizeRegistryState(cloud.registry);
+      const tombstones = normalizeRegistryTombstones(cloud.registryTombstones);
+      const merged = mergeRegistryStates(local, cloudRegistry, tombstones);
+      if (stableStringify(local) !== stableStringify(merged)) {
+        writeJsonState(root, getRegistryStorageKey(memberNumber), merged);
+      }
+      return merged;
     } catch (error) {
       console.warn("[BCXIR] Failed to load local item rule registry; using empty registry.", error);
       return { v: 1, entries: {} };
@@ -451,7 +670,7 @@
   }
   function saveRegistry(root, state, memberNumber = getPlayerMemberNumber(root)) {
     if (memberNumber == null) return;
-    writeJsonState(root, getRegistryStorageKey(memberNumber), normalizeRegistryState(state));
+    saveRegistryWithTombstones(root, normalizeRegistryState(state), {}, memberNumber);
   }
   function listRegistryEntries(root, memberNumber = getPlayerMemberNumber(root)) {
     return Object.values(loadRegistry(root, memberNumber).entries).map((entry) => deepClone(entry));
@@ -501,14 +720,21 @@
     const state = loadRegistry(root, memberNumber);
     const key = normalizeItemName(itemName);
     if (!state.entries[key]) return false;
+    const removed = state.entries[key];
     delete state.entries[key];
-    saveRegistry(root, state, memberNumber);
+    saveRegistryWithTombstones(root, state, {
+      [key]: makeRegistryTombstone(removed.itemName || itemName)
+    }, memberNumber);
     return true;
   }
   function clearRegistry(root, memberNumber = getPlayerMemberNumber(root)) {
-    var _a;
     if (memberNumber == null) return;
-    (_a = root.localStorage) == null ? void 0 : _a.removeItem(getRegistryStorageKey(memberNumber));
+    const state = loadRegistry(root, memberNumber);
+    const tombstones = {};
+    for (const [key, entry] of Object.entries(state.entries)) {
+      tombstones[key] = makeRegistryTombstone(entry.itemName);
+    }
+    saveRegistryWithTombstones(root, { v: 1, entries: {} }, tombstones, memberNumber);
   }
   function findMatchingRegistryEntry(root, itemOrName, memberNumber = getPlayerMemberNumber(root)) {
     const itemText = typeof itemOrName === "string" ? itemOrName : getItemNameAndDescriptionConcat(root, itemOrName);
@@ -590,37 +816,8 @@
     saveRuleCache(root, state);
     return true;
   }
-  function decodeExtensionSettingsRaw(root, raw) {
-    if (typeof raw !== "string" || !raw) return null;
-    const lz = getLz(root);
-    if (!lz) throw new Error("LZString base64 codec is unavailable");
-    const json = lz.decompressFromBase64(raw);
-    if (!json) throw new Error("extension settings decompression failed");
-    return JSON.parse(json);
-  }
-  function encodeExtensionSettingsRaw(root, value) {
-    const lz = getLz(root);
-    if (!lz) throw new Error("LZString base64 codec is unavailable");
-    const encoded = lz.compressToBase64(JSON.stringify(value));
-    if (typeof encoded !== "string" || !encoded) throw new Error("extension settings compression failed");
-    return encoded;
-  }
-  function getLz(root) {
-    const lz = root.LZString || globalThis.LZString;
-    if (lz && typeof lz.compressToBase64 === "function" && typeof lz.decompressFromBase64 === "function") {
-      return lz;
-    }
-    return null;
-  }
-  function getPlayerNumber(root) {
-    const value = root.Player && root.Player.MemberNumber;
-    return value == null ? "DEFAULT" : String(value);
-  }
   function storageKey(root) {
     return STORAGE_PREFIX + getPlayerNumber(root);
-  }
-  function settingsBackupKey(root) {
-    return SETTINGS_BACKUP_PREFIX + getPlayerNumber(root) + "_backup";
   }
   function emptyState() {
     return {
@@ -634,12 +831,14 @@
   }
   function loadState(root) {
     try {
-      const extensionActiveItemPayloads = loadActiveItemPayloadsFromExtensionSettings(root);
+      const cloud = readCloudDocument(root);
       const raw = root.localStorage && root.localStorage.getItem(storageKey(root));
       if (!raw) {
         return {
           ...emptyState(),
-          activeItemPayloads: extensionActiveItemPayloads.value
+          activeItemPayloads: normalizeActiveItemPayloads(cloud.activeItemPayloads),
+          managed: isPlainObject(cloud.managed) ? cloud.managed : {},
+          targetManaged: normalizeTargetManaged(cloud.targetManaged)
         };
       }
       const parsed = JSON.parse(raw);
@@ -647,10 +846,10 @@
       return {
         version: 1,
         activePayloadIds: Array.isArray(parsed.activePayloadIds) ? parsed.activePayloadIds : [],
-        activeItemPayloads: extensionActiveItemPayloads.found ? extensionActiveItemPayloads.value : normalizeActiveItemPayloads(parsed.activeItemPayloads),
-        managed: parsed.managed && typeof parsed.managed === "object" ? parsed.managed : {},
+        activeItemPayloads: isPlainObject(cloud.activeItemPayloads) ? normalizeActiveItemPayloads(cloud.activeItemPayloads) : normalizeActiveItemPayloads(parsed.activeItemPayloads),
+        managed: isPlainObject(cloud.managed) ? cloud.managed : parsed.managed && typeof parsed.managed === "object" ? parsed.managed : {},
         targetAppearances: normalizeTargetAppearances(parsed.targetAppearances),
-        targetManaged: normalizeTargetManaged(parsed.targetManaged)
+        targetManaged: isPlainObject(cloud.targetManaged) ? normalizeTargetManaged(cloud.targetManaged) : normalizeTargetManaged(parsed.targetManaged)
       };
     } catch (error) {
       console.warn("[BCXIR] Failed to load local state; starting clean.", error);
@@ -660,57 +859,14 @@
   function saveState(root, state) {
     try {
       root.localStorage && root.localStorage.setItem(storageKey(root), JSON.stringify(state));
-      syncActiveItemPayloadsToExtensionSettings(root, state.activeItemPayloads);
+      saveCloudDocument(root, {
+        activeItemPayloads: normalizeActiveItemPayloads(state.activeItemPayloads),
+        managed: state.managed,
+        targetManaged: normalizeTargetManaged(state.targetManaged)
+      }, { replace: ["activeItemPayloads", "managed", "targetManaged"] });
     } catch (error) {
       console.warn("[BCXIR] Failed to save local state.", error);
     }
-  }
-  function loadActiveItemPayloadsFromExtensionSettings(root) {
-    var _a, _b, _c;
-    for (const raw of [
-      (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY],
-      (_c = root.localStorage) == null ? void 0 : _c.getItem(settingsBackupKey(root))
-    ]) {
-      try {
-        const decoded = decodeExtensionSettingsRaw(root, raw);
-        if (isPlainObject(decoded) && isPlainObject(decoded.activeItemPayloads)) {
-          return { found: true, value: normalizeActiveItemPayloads(decoded.activeItemPayloads) };
-        }
-        if (isPlainObject(decoded) && isPlainObject(decoded.settings)) {
-          return { found: true, value: {} };
-        }
-      } catch {
-      }
-    }
-    return { found: false, value: {} };
-  }
-  function syncActiveItemPayloadsToExtensionSettings(root, activeItemPayloads) {
-    var _a, _b, _c, _d, _e;
-    if (!root.Player) return;
-    const active = normalizeActiveItemPayloads(activeItemPayloads);
-    const currentRaw = (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY];
-    const backupRaw = (_c = root.localStorage) == null ? void 0 : _c.getItem(settingsBackupKey(root));
-    const decoded = decodeFirstAvailable(root, currentRaw, backupRaw);
-    const settings = isPlainObject(decoded) && isPlainObject(decoded.settings) ? decoded.settings : isPlainObject(decoded) ? decoded : {};
-    const document = Object.keys(active).length ? { v: 1, settings, activeItemPayloads: active } : { v: 1, settings };
-    const encoded = encodeExtensionSettingsRaw(root, document);
-    if (currentRaw === encoded && backupRaw === encoded) return;
-    (_d = root.Player).ExtensionSettings || (_d.ExtensionSettings = {});
-    root.Player.ExtensionSettings[SETTINGS_EXTENSION_KEY] = encoded;
-    (_e = root.localStorage) == null ? void 0 : _e.setItem(settingsBackupKey(root), encoded);
-    if (typeof root.ServerPlayerExtensionSettingsSync === "function") {
-      root.ServerPlayerExtensionSettingsSync(SETTINGS_EXTENSION_KEY);
-    }
-  }
-  function decodeFirstAvailable(root, ...rawValues) {
-    for (const raw of rawValues) {
-      try {
-        const decoded = decodeExtensionSettingsRaw(root, raw);
-        if (decoded) return decoded;
-      } catch {
-      }
-    }
-    return null;
   }
   function normalizeActiveItemPayloads(value) {
     const out = {};
@@ -1695,11 +1851,6 @@
     removeMyRulesFromNonPluginUsers: false,
     showTransportMessages: true
   };
-  function getSettingsBackupKey(root) {
-    var _a;
-    const number = ((_a = root.Player) == null ? void 0 : _a.MemberNumber) == null ? "DEFAULT" : String(root.Player.MemberNumber);
-    return SETTINGS_BACKUP_PREFIX + number + "_backup";
-  }
   function normalizeSettings(value) {
     const source = isPlainObject(value) ? value : {};
     const dangerModeEnabled = source.dangerModeEnabled === true;
@@ -1727,31 +1878,6 @@
       showTransportMessages: source.showTransportMessages !== false
     };
   }
-  function decodeSettings(root, raw) {
-    const decoded = decodeExtensionSettingsRaw(root, raw);
-    if (!decoded) return null;
-    const settings = isPlainObject(decoded) && isPlainObject(decoded.settings) ? decoded.settings : decoded;
-    return normalizeSettings(settings);
-  }
-  function encodeSettings(root, settings) {
-    const activeItemPayloads = readExistingActiveItemPayloads(root);
-    const document = activeItemPayloads ? { v: 1, settings: normalizeSettings(settings), activeItemPayloads } : { v: 1, settings: normalizeSettings(settings) };
-    return encodeExtensionSettingsRaw(root, document);
-  }
-  function readExistingActiveItemPayloads(root) {
-    var _a, _b, _c;
-    for (const raw of [
-      (_b = (_a = root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY],
-      (_c = root.localStorage) == null ? void 0 : _c.getItem(getSettingsBackupKey(root))
-    ]) {
-      try {
-        const decoded = decodeExtensionSettingsRaw(root, raw);
-        if (isPlainObject(decoded) && isPlainObject(decoded.activeItemPayloads)) return decoded.activeItemPayloads;
-      } catch {
-      }
-    }
-    return null;
-  }
   class ExtensionSettingsStore {
     constructor(root) {
       __publicField(this, "current", deepClone(DEFAULT_SETTINGS));
@@ -1762,37 +1888,25 @@
       return deepClone(this.current);
     }
     load() {
-      var _a, _b, _c;
-      const extensionRaw = (_b = (_a = this.root.Player) == null ? void 0 : _a.ExtensionSettings) == null ? void 0 : _b[SETTINGS_EXTENSION_KEY];
-      const backupRaw = (_c = this.root.localStorage) == null ? void 0 : _c.getItem(getSettingsBackupKey(this.root));
-      for (const raw of [extensionRaw, backupRaw]) {
-        try {
-          const parsed = decodeSettings(this.root, raw);
-          if (parsed) {
-            this.current = parsed;
-            return this.get();
-          }
-        } catch (error) {
-          if (!this.warnedLoadFailure) {
-            this.warnedLoadFailure = true;
-            console.warn("[BCXIR] Failed to load settings; using defaults.", error);
-          }
+      try {
+        const settings = readCloudDocument(this.root).settings;
+        if (isPlainObject(settings)) {
+          this.current = normalizeSettings(settings);
+          return this.get();
+        }
+      } catch (error) {
+        if (!this.warnedLoadFailure) {
+          this.warnedLoadFailure = true;
+          console.warn("[BCXIR] Failed to load settings; using defaults.", error);
         }
       }
       this.current = deepClone(DEFAULT_SETTINGS);
       return this.get();
     }
     save(settings) {
-      var _a, _b;
       this.current = normalizeSettings(settings);
       try {
-        const encoded = encodeSettings(this.root, this.current);
-        (_a = this.root.Player).ExtensionSettings || (_a.ExtensionSettings = {});
-        this.root.Player.ExtensionSettings[SETTINGS_EXTENSION_KEY] = encoded;
-        (_b = this.root.localStorage) == null ? void 0 : _b.setItem(getSettingsBackupKey(this.root), encoded);
-        if (typeof this.root.ServerPlayerExtensionSettingsSync === "function") {
-          this.root.ServerPlayerExtensionSettingsSync(SETTINGS_EXTENSION_KEY);
-        }
+        saveCloudDocument(this.root, { settings: this.current });
       } catch (error) {
         console.warn("[BCXIR] Failed to save settings.", error);
       }
