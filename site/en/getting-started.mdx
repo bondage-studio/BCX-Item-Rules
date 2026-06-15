@@ -6,28 +6,24 @@ order: 20
 
 ## Prerequisites
 
-1. **A userscript manager.** [Tampermonkey](https://www.tampermonkey.net/) is recommended (Chrome, Edge, Firefox).
-2. **BCX**, installed and working in game. BCXIR requires BCX to be available as `window.bcx`. If BCX is not present, BCXIR will not apply any rules.
+**BCX**, installed and working in game. BCXIR requires BCX to be available as `window.bcx`. If BCX is not present, BCXIR will not apply any rules. (You'll also need a userscript manager — the install step below sets one up.)
 
 ## Install the loader
 
-You only ever install the **loader**. The loader is tiny and fetches the latest runtime script automatically, so you rarely need to reinstall it.
+You only ever install the **loader**. The loader is tiny and fetches the latest runtime script automatically, so you rarely need to reinstall it. It runs with `@grant none` and needs no special permissions.
 
-Install from GitHub Pages — use the canonical, auto-updating URL (this is the URL the loader itself uses to fetch updates):
+Install it from GitHub Pages using the canonical, auto-updating URL (this is the URL the loader itself uses to fetch updates):
 
-```text
-https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js
-```
+<UserscriptInstall
+  url="https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js"
+  name="BCX Item Rules"
+/>
 
 > **Compatibility alias.** If you previously installed from `BCXItemRules.user.js`, that file is an alias of the loader and still works:
 >
 > ```text
 > https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.user.js
 > ```
-
-When you open one of these links, Tampermonkey shows its install page. Review the `@match` entries and click **Install**. The loader runs with `@grant none` and needs no special permissions.
-
-![Tampermonkey install page](../screenshots/install-tampermonkey.png)
 
 ## How loader updates work
 

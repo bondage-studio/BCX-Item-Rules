@@ -6,28 +6,24 @@ order: 20
 
 ## 前置条件
 
-1. **一个用户脚本管理器。** 推荐 [Tampermonkey](https://www.tampermonkey.net/)（Chrome、Edge、Firefox）。
-2. **BCX**，已在游戏中安装并正常工作。BCXIR 需要 BCX 以 `window.bcx` 的形式存在。如果没有 BCX，BCXIR 不会应用任何规则。
+**BCX**，已在游戏中安装并正常工作。BCXIR 需要 BCX 以 `window.bcx` 的形式存在。如果没有 BCX，BCXIR 不会应用任何规则。（你还需要一个用户脚本管理器——下面的安装步骤会引导你装好。）
 
 ## 安装 loader
 
-你始终只需安装 **loader**。loader 体积很小，会自动拉取最新的运行脚本，因此你几乎不需要重新安装它。
+你始终只需安装 **loader**。loader 体积很小，会自动拉取最新的运行脚本，因此你几乎不需要重新安装它。它以 `@grant none` 运行，无需任何特殊权限。
 
-从 GitHub Pages 安装 —— 使用具备自动更新能力的规范地址（loader 自身就用这个地址拉取更新）：
+从 GitHub Pages 安装，使用具备自动更新能力的规范地址：
 
-```text
-https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js
-```
+<UserscriptInstall
+  url="https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.loader.user.js"
+  name="BCX Item Rules"
+/>
 
 > **兼容别名。** 如果你之前是从 `BCXItemRules.user.js` 安装的，这个文件是 loader 的别名，仍然可用：
 >
 > ```text
 > https://bondage-studio.github.io/BCX-Item-Rules/BCXItemRules.user.js
 > ```
-
-打开上述任一链接后，Tampermonkey 会显示安装页面。检查 `@match` 条目，然后点击**安装**。loader 以 `@grant none` 运行，无需任何特殊权限。
-
-![Tampermonkey 安装页](../screenshots/install-tampermonkey.png)
 
 ## loader 更新机制
 
