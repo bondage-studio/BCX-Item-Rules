@@ -35,6 +35,7 @@
   const SYNC_DEBOUNCE_MS = 250;
   const FALLBACK_SYNC_MS = 5e3;
   const QUERY_TIMEOUT_MS = 1e4;
+  const BCX_QUERY_QUEUE_DELAY_MS = 150;
   const ITEM_RULE_REQUEST_COOLDOWN_MS = 3e4;
   const ITEM_RULE_REQUEST_MAX_COOLDOWN_MS = 6e5;
   const ITEM_RULE_PROTOCOL_VERSION = 1;
@@ -43,11 +44,12 @@
   const ITEM_RULE_REQUEST_COMMAND = "bcxir-item-rules-request";
   const ITEM_RULE_RESPONSE_COMMAND = "bcxir-item-rules-response";
   class BCXAdapter {
-    constructor(root, creatorSenderTransport, useMeTransport) {
+    constructor(root, creatorSenderTransport, useMeTransport, queryQueue) {
       __publicField(this, "bcxApi", null);
       this.root = root;
       this.creatorSenderTransport = creatorSenderTransport;
       this.useMeTransport = useMeTransport;
+      this.queryQueue = queryQueue;
     }
     canUseBCX() {
       return !!(this.root.bcx && typeof this.root.bcx.getModApi === "function");
@@ -63,6 +65,15 @@
       }
     }
     async query(type, data, context = { kind: "self" }) {
+      const label = this.makeQueryLabel(type, context);
+      const runQuery = () => this.queryDirect(type, data, context);
+      return this.queryQueue ? this.queryQueue.enqueue(label, runQuery) : runQuery();
+    }
+    getQueryQueueDiagnostics() {
+      var _a;
+      return ((_a = this.queryQueue) == null ? void 0 : _a.getDiagnostics()) || null;
+    }
+    async queryDirect(type, data, context) {
       if (context.kind === "creator") {
         if (!this.creatorSenderTransport) throw new Error("Creator sender transport is unavailable");
         return this.creatorSenderTransport.queryAsSender(type, data, context, QUERY_TIMEOUT_MS);
@@ -76,6 +87,11 @@
         throw new Error("BCX API is unavailable");
       }
       return api.sendQuery(type, data, "Player", QUERY_TIMEOUT_MS);
+    }
+    makeQueryLabel(type, context) {
+      if (context.kind === "creator") return "creator:" + context.memberNumber + ":" + type;
+      if (context.kind === "useMe") return "useMe:" + type;
+      return "self:" + type;
     }
     isKnownRule(ruleId) {
       const api = this.getApi();
@@ -921,6 +937,7 @@
       const invalidMessages = desiredInfo.errors.map((error) => "Invalid item payload: " + error);
       const settings = this.settingsStore.get();
       let latestConditionsData = null;
+      const applyGroups = /* @__PURE__ */ new Map();
       for (const [ruleId, desired] of desiredInfo.desired.entries()) {
         if (!this.bcx.isKnownRule(ruleId)) {
           conflictMessages.push("Unknown BCX rule skipped: " + ruleId);
@@ -931,117 +948,161 @@
           conflictMessages.push("No permitted sender available for item rule: " + ruleId);
           continue;
         }
+        const contextKey = this.makeRuleContextKey(applyContext.context);
+        let group = applyGroups.get(contextKey);
+        if (!group) {
+          group = { applyContext, rules: [] };
+          applyGroups.set(contextKey, group);
+        }
+        group.rules.push({ ruleId, desired });
+      }
+      for (const group of applyGroups.values()) {
+        const applyContext = group.applyContext;
         let conditionsData;
         try {
           conditionsData = await this.bcx.fetchRuleConditions(applyContext.context);
           latestConditionsData = conditionsData;
         } catch (error) {
-          conflictMessages.push("Failed to read BCX rules as sender for " + ruleId + ": " + this.errorMessage(error));
+          for (const { ruleId } of group.rules) {
+            conflictMessages.push("Failed to read BCX rules as sender for " + ruleId + ": " + this.errorMessage(error));
+          }
           continue;
         }
-        const current = this.bcx.getRulePublicData(conditionsData, ruleId);
-        const managed = state.managed[ruleId];
-        const wasManaged = !!managed;
-        const comparableCurrent = normalizeConditionForUpdate(current);
-        if ((managed == null ? void 0 : managed.lastApplied) && comparableCurrent && !sameStable(comparableCurrent, managed.lastApplied)) {
-          delete state.managed[ruleId];
-          conflictMessages.push("Rule changed outside BCXIR; released: " + ruleId);
-          continue;
-        }
-        if (!managed && current) {
-          const canSuspendInactive = settings.dangerModeEnabled === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
-          if (!canSuspendInactive) {
-            conflictMessages.push(
-              (comparableCurrent == null ? void 0 : comparableCurrent.active) === false && settings.dangerModeEnabled === true ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId : "Existing BCX rule not overwritten: " + ruleId
-            );
+        const updateCandidates = [];
+        let createdAny = false;
+        for (const { ruleId, desired } of group.rules) {
+          const current = this.bcx.getRulePublicData(conditionsData, ruleId);
+          const managed = state.managed[ruleId];
+          const wasManaged = !!managed;
+          const comparableCurrent = normalizeConditionForUpdate(current);
+          if ((managed == null ? void 0 : managed.lastApplied) && comparableCurrent && !sameStable(comparableCurrent, managed.lastApplied)) {
+            delete state.managed[ruleId];
+            conflictMessages.push("Rule changed outside BCXIR; released: " + ruleId);
             continue;
           }
-          state.managed[ruleId] = {
-            previousCondition: deepClone(comparableCurrent),
-            createdByUs: false,
-            payloadIds: [],
-            updatedAt: now(),
-            appliedSenderMemberNumber: applyContext.senderMemberNumber,
-            appliedSenderWasMinimal: applyContext.allowMinimalCreator,
-            appliedContextKind: applyContext.context.kind,
-            suspendedExistingInactive: true
-          };
+          if (!managed && current) {
+            const canSuspendInactive = settings.dangerModeEnabled === true && settings.useMeSuspendInactiveConflicts === true && (comparableCurrent == null ? void 0 : comparableCurrent.active) === false;
+            if (!canSuspendInactive) {
+              conflictMessages.push(
+                (comparableCurrent == null ? void 0 : comparableCurrent.active) === false && settings.dangerModeEnabled === true ? "Existing inactive BCX rule not overwritten without suspend option: " + ruleId : "Existing BCX rule not overwritten: " + ruleId
+              );
+              continue;
+            }
+            state.managed[ruleId] = {
+              previousCondition: deepClone(comparableCurrent),
+              createdByUs: false,
+              payloadIds: [],
+              updatedAt: now(),
+              appliedSenderMemberNumber: applyContext.senderMemberNumber,
+              appliedSenderWasMinimal: applyContext.allowMinimalCreator,
+              appliedContextKind: applyContext.context.kind,
+              suspendedExistingInactive: true
+            };
+          }
+          if (!state.managed[ruleId]) {
+            const okCreate = await this.bcx.ensureRuleExists(ruleId, conditionsData, applyContext.context);
+            if (!okCreate) {
+              conflictMessages.push("BCX refused to create rule: " + ruleId);
+              continue;
+            }
+            createdAny = true;
+            state.managed[ruleId] = {
+              previousCondition: null,
+              createdByUs: !current,
+              payloadIds: [],
+              updatedAt: now(),
+              appliedSenderMemberNumber: applyContext.senderMemberNumber,
+              appliedSenderWasMinimal: applyContext.allowMinimalCreator,
+              appliedContextKind: applyContext.context.kind
+            };
+          }
+          updateCandidates.push({ ruleId, desired, wasManaged });
         }
-        if (!state.managed[ruleId]) {
-          const okCreate = await this.bcx.ensureRuleExists(ruleId, conditionsData, applyContext.context);
-          if (!okCreate) {
-            conflictMessages.push("BCX refused to create rule: " + ruleId);
+        if (createdAny) {
+          try {
+            conditionsData = await this.bcx.fetchRuleConditions(applyContext.context);
+            latestConditionsData = conditionsData;
+          } catch (error) {
+            for (const { ruleId } of updateCandidates) {
+              conflictMessages.push("Failed to reload BCX rules after create for " + ruleId + ": " + this.errorMessage(error));
+            }
             continue;
           }
-          conditionsData = await this.bcx.fetchRuleConditions(applyContext.context);
-          latestConditionsData = conditionsData;
-          state.managed[ruleId] = {
-            previousCondition: null,
-            createdByUs: !current,
-            payloadIds: [],
-            updatedAt: now(),
-            appliedSenderMemberNumber: applyContext.senderMemberNumber,
-            appliedSenderWasMinimal: applyContext.allowMinimalCreator,
-            appliedContextKind: applyContext.context.kind
-          };
         }
-        const currentForUpdate = this.bcx.getRulePublicData(conditionsData, ruleId);
-        const updateData = makeRuleUpdateData(desired.conditionData, currentForUpdate);
-        const okUpdate = await this.bcx.updateRule(ruleId, updateData, applyContext.context);
-        if (okUpdate !== true) {
-          const createdState = state.managed[ruleId];
-          if (!wasManaged && (createdState == null ? void 0 : createdState.previousCondition)) {
-            await this.bcx.updateRule(ruleId, createdState.previousCondition, applyContext.context).catch(() => false);
-            delete state.managed[ruleId];
-          } else if (!wasManaged && (createdState == null ? void 0 : createdState.createdByUs)) {
-            await this.bcx.deleteRule(ruleId, applyContext.context).catch(() => false);
-            delete state.managed[ruleId];
+        for (const { ruleId, desired, wasManaged } of updateCandidates) {
+          const currentForUpdate = this.bcx.getRulePublicData(conditionsData, ruleId);
+          const updateData = makeRuleUpdateData(desired.conditionData, currentForUpdate);
+          const okUpdate = await this.bcx.updateRule(ruleId, updateData, applyContext.context);
+          if (okUpdate !== true) {
+            const createdState = state.managed[ruleId];
+            if (!wasManaged && (createdState == null ? void 0 : createdState.previousCondition)) {
+              await this.bcx.updateRule(ruleId, createdState.previousCondition, applyContext.context).catch(() => false);
+              delete state.managed[ruleId];
+            } else if (!wasManaged && (createdState == null ? void 0 : createdState.createdByUs)) {
+              await this.bcx.deleteRule(ruleId, applyContext.context).catch(() => false);
+              delete state.managed[ruleId];
+            }
+            conflictMessages.push("BCX refused to update rule: " + ruleId);
+            continue;
           }
-          conflictMessages.push("BCX refused to update rule: " + ruleId);
-          continue;
+          state.managed[ruleId].lastApplied = deepClone(updateData);
+          state.managed[ruleId].payloadIds = Array.from(new Set(desired.payloadIds));
+          state.managed[ruleId].updatedAt = now();
+          state.managed[ruleId].appliedSenderMemberNumber = applyContext.senderMemberNumber;
+          state.managed[ruleId].appliedSenderWasMinimal = applyContext.allowMinimalCreator;
+          state.managed[ruleId].appliedContextKind = applyContext.context.kind;
+          changedMessages.push("Applied " + ruleId);
         }
-        state.managed[ruleId].lastApplied = deepClone(updateData);
-        state.managed[ruleId].payloadIds = Array.from(new Set(desired.payloadIds));
-        state.managed[ruleId].updatedAt = now();
-        state.managed[ruleId].appliedSenderMemberNumber = applyContext.senderMemberNumber;
-        state.managed[ruleId].appliedSenderWasMinimal = applyContext.allowMinimalCreator;
-        state.managed[ruleId].appliedContextKind = applyContext.context.kind;
-        changedMessages.push("Applied " + ruleId);
       }
-      latestConditionsData = await this.bcx.fetchRuleConditions().catch(() => latestConditionsData);
+      const cleanupGroups = /* @__PURE__ */ new Map();
       for (const ruleId of Object.keys(state.managed)) {
         if (desiredInfo.desired.has(ruleId)) continue;
         const managed = state.managed[ruleId];
         const cleanupContext = this.getManagedRuleContext(managed);
+        const contextKey = this.makeRuleContextKey(cleanupContext.context);
+        let group = cleanupGroups.get(contextKey);
+        if (!group) {
+          group = { cleanupContext, rules: [] };
+          cleanupGroups.set(contextKey, group);
+        }
+        group.rules.push({ ruleId, managed });
+      }
+      if (Array.from(cleanupGroups.values()).some((group) => group.cleanupContext.context.kind === "self")) {
+        latestConditionsData = await this.bcx.fetchRuleConditions().catch(() => latestConditionsData);
+      }
+      for (const group of cleanupGroups.values()) {
+        const cleanupContext = group.cleanupContext;
         let conditionsData = latestConditionsData;
         if (cleanupContext.context.kind !== "self") {
           conditionsData = await this.bcx.fetchRuleConditions(cleanupContext.context).catch(() => latestConditionsData);
         }
-        const current = this.bcx.getRulePublicData(conditionsData, ruleId);
-        const comparableCurrent = normalizeConditionForUpdate(current);
-        if (managed.lastApplied && comparableCurrent && !sameStable(comparableCurrent, managed.lastApplied)) {
-          delete state.managed[ruleId];
-          conflictMessages.push("Removed item no longer controls externally changed rule: " + ruleId);
-          continue;
-        }
-        if (managed.previousCondition) {
-          const okRestore = await this.bcx.updateRule(ruleId, managed.previousCondition, cleanupContext.context);
-          if (okRestore === true) {
-            changedMessages.push("Restored " + ruleId);
+        for (const { ruleId, managed } of group.rules) {
+          const current = this.bcx.getRulePublicData(conditionsData, ruleId);
+          const comparableCurrent = normalizeConditionForUpdate(current);
+          if (managed.lastApplied && comparableCurrent && !sameStable(comparableCurrent, managed.lastApplied)) {
             delete state.managed[ruleId];
-          } else {
-            conflictMessages.push("BCX refused to restore rule: " + ruleId);
+            conflictMessages.push("Removed item no longer controls externally changed rule: " + ruleId);
+            continue;
           }
-        } else if (managed.createdByUs) {
-          const okDelete = await this.bcx.deleteRule(ruleId, cleanupContext.context);
-          if (okDelete === true) {
-            changedMessages.push("Removed " + ruleId);
+          if (managed.previousCondition) {
+            const okRestore = await this.bcx.updateRule(ruleId, managed.previousCondition, cleanupContext.context);
+            if (okRestore === true) {
+              changedMessages.push("Restored " + ruleId);
+              delete state.managed[ruleId];
+            } else {
+              conflictMessages.push("BCX refused to restore rule: " + ruleId);
+            }
+          } else if (managed.createdByUs) {
+            const okDelete = await this.bcx.deleteRule(ruleId, cleanupContext.context);
+            if (okDelete === true) {
+              changedMessages.push("Removed " + ruleId);
+              delete state.managed[ruleId];
+            } else {
+              conflictMessages.push("BCX refused to delete rule: " + ruleId);
+            }
+          } else {
             delete state.managed[ruleId];
-          } else {
-            conflictMessages.push("BCX refused to delete rule: " + ruleId);
           }
-        } else {
-          delete state.managed[ruleId];
         }
       }
       state.activePayloadIds = desiredInfo.payloadIds;
@@ -1249,6 +1310,12 @@
         senderMemberNumber: sender,
         allowMinimalCreator
       };
+    }
+    makeRuleContextKey(context) {
+      if (context.kind === "creator") {
+        return ["creator", String(context.memberNumber), context.allowMinimalCreator === true ? "minimal" : "room"].join(":");
+      }
+      return context.kind;
     }
     getPlayerMemberNumber() {
       var _a;
@@ -1541,6 +1608,7 @@
     "diagnostics.bcx": "BCX: {bcx} / Authoring: {authoring}",
     "diagnostics.sync": "Sync: {result} / {reason}",
     "diagnostics.counts": "Payloads: {payloads} / Managed rules: {managed} / Pending: {pending}",
+    "diagnostics.queue": "BCX query: {active} / Waiting: {waiting} / Done: {processed}",
     "diagnostics.conflicts": "Show conflict messages",
     "diagnostics.conflicts.tip": "Display local messages for rule conflicts.",
     "diagnostics.invalid": "Show invalid payload messages",
@@ -1684,6 +1752,7 @@
     "diagnostics.bcx": "BCX：{bcx} / 编辑：{authoring}",
     "diagnostics.sync": "同步：{result} / {reason}",
     "diagnostics.counts": "Payload：{payloads} / 管理规则：{managed} / 待请求：{pending}",
+    "diagnostics.queue": "BCX 队列：{active} / 等待：{waiting} / 已完成：{processed}",
     "diagnostics.conflicts": "显示冲突提示",
     "diagnostics.conflicts.tip": "本地显示规则冲突消息。",
     "diagnostics.invalid": "显示无效 payload 提示",
@@ -2410,12 +2479,13 @@
     bcx: 0,
     sync: 1,
     counts: 2,
-    messages1: 3,
-    messages2: 4,
-    transport: 5,
-    debug: 6,
-    fallback: 7,
-    cachedOffline: 8
+    queue: 3,
+    messages1: 4,
+    messages2: 5,
+    transport: 6,
+    debug: 7,
+    fallback: 8,
+    cachedOffline: 9
   };
   const ACTIONS = {
     syncNow: { col: 0, row: 0, labelKey: "diagnostics.syncNow", tooltipKey: "diagnostics.syncNow.tip" },
@@ -2455,6 +2525,7 @@
       const settings = this.settingsStore.get();
       const sync = this.synchronizer.getDiagnostics();
       const transport = ((_a = this.itemRuleTransport) == null ? void 0 : _a.getDiagnostics()) || {};
+      const queue = this.bcx.getQueryQueueDiagnostics();
       const authoring = (_b = this.authoring) == null ? void 0 : _b.getState();
       const lockActive = isWornItemRuleLockActive(this.root, settings);
       this.drawLeftLabel(ROWS$1.bcx, this.t("diagnostics.bcx", {
@@ -2470,6 +2541,11 @@
         managed: String(sync.managedRuleCount || 0),
         pending: String(transport.pendingRequestCount || 0)
       }));
+      this.drawLeftLabel(ROWS$1.queue, this.t("diagnostics.queue", {
+        active: String((queue == null ? void 0 : queue.activeLabel) || this.t("common.none")),
+        waiting: String((queue == null ? void 0 : queue.queueLength) || 0),
+        processed: String((queue == null ? void 0 : queue.processedCount) || 0)
+      }), String((queue == null ? void 0 : queue.lastError) || this.t("common.none")));
       this.drawLeftCheckbox(ROWS$1.messages1, this.t("diagnostics.conflicts"), this.t("diagnostics.conflicts.tip"), settings.showConflictMessages);
       this.drawLeftCheckbox(ROWS$1.messages2, this.t("diagnostics.invalid"), this.t("diagnostics.invalid.tip"), settings.showInvalidPayloadMessages);
       this.drawLeftCheckbox(ROWS$1.transport, this.t("diagnostics.transport"), this.t("diagnostics.transport.tip"), settings.showTransportMessages);
@@ -2592,6 +2668,7 @@
         settings: this.settingsStore.get(),
         sync: this.synchronizer.getDiagnostics(),
         transport: ((_a = this.itemRuleTransport) == null ? void 0 : _a.getDiagnostics()) || {},
+        queue: this.bcx.getQueryQueueDiagnostics(),
         authoring: ((_b = this.authoring) == null ? void 0 : _b.getState()) || null,
         bcxAvailable: this.bcx.canUseBCX()
       }, null, 2);
@@ -4592,13 +4669,71 @@
       ].join(":");
     }
   }
+  class BCXQueryQueue {
+    constructor(root, debugEnabled = () => false) {
+      __publicField(this, "entries", []);
+      __publicField(this, "active", false);
+      __publicField(this, "activeLabel", null);
+      __publicField(this, "lastError", null);
+      __publicField(this, "processedCount", 0);
+      this.root = root;
+      this.debugEnabled = debugEnabled;
+    }
+    enqueue(label, task) {
+      return new Promise((resolve, reject) => {
+        this.entries.push({
+          label,
+          task,
+          resolve,
+          reject
+        });
+        this.pump();
+      });
+    }
+    getDiagnostics() {
+      return {
+        queueLength: this.entries.length,
+        activeLabel: this.activeLabel,
+        lastError: this.lastError,
+        processedCount: this.processedCount
+      };
+    }
+    pump() {
+      if (this.active) return;
+      const entry = this.entries.shift();
+      if (!entry) return;
+      this.active = true;
+      this.activeLabel = entry.label;
+      const startedAt = Date.now();
+      Promise.resolve().then(() => entry.task()).then((value) => {
+        this.processedCount += 1;
+        entry.resolve(value);
+      }).catch((error) => {
+        this.processedCount += 1;
+        this.lastError = String(error instanceof Error ? error.message : error);
+        entry.reject(error);
+      }).finally(() => {
+        this.debug(entry.label, Date.now() - startedAt);
+        this.activeLabel = null;
+        this.root.setTimeout(() => {
+          this.active = false;
+          this.pump();
+        }, BCX_QUERY_QUEUE_DELAY_MS);
+      });
+    }
+    debug(label, elapsedMs) {
+      if (!this.debugEnabled()) return;
+      console.info("[BCXIR]", "BCX query", label, elapsedMs + "ms");
+    }
+  }
   function bootstrap() {
     const root = getRoot();
     const settingsStore = new ExtensionSettingsStore(root);
     const reporter = new Reporter(root, settingsStore);
     const creatorSenderTransport = new CreatorSenderQueryTransport(root);
     const useMeTransport = new UseMeQueryTransport(root);
-    const bcx = new BCXAdapter(root, creatorSenderTransport, useMeTransport);
+    const queryQueue = new BCXQueryQueue(root, () => settingsStore.get().debugLogging);
+    const bcx = new BCXAdapter(root, creatorSenderTransport, useMeTransport, queryQueue);
     const itemRuleTransport = new ItemRuleTransport(root, reporter, settingsStore);
     const synchronizer = new RuleSynchronizer(root, bcx, reporter, settingsStore, itemRuleTransport);
     itemRuleTransport.setRulesReceivedCallback(() => synchronizer.scheduleSync("item-rule-response"));

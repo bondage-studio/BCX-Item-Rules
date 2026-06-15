@@ -10,6 +10,7 @@ import { AuthoringSession } from "../authoring/authoring-session";
 import { ItemRuleTransport } from "../platform/item-rule-transport";
 import { CreatorSenderQueryTransport } from "../platform/creator-sender-query-transport";
 import { UseMeQueryTransport } from "../platform/use-me-query-transport";
+import { BCXQueryQueue } from "../platform/bcx-query-queue";
 
 export function bootstrap(): void {
   const root = getRoot();
@@ -17,7 +18,8 @@ export function bootstrap(): void {
   const reporter = new Reporter(root, settingsStore);
   const creatorSenderTransport = new CreatorSenderQueryTransport(root);
   const useMeTransport = new UseMeQueryTransport(root);
-  const bcx = new BCXAdapter(root, creatorSenderTransport, useMeTransport);
+  const queryQueue = new BCXQueryQueue(root, () => settingsStore.get().debugLogging);
+  const bcx = new BCXAdapter(root, creatorSenderTransport, useMeTransport, queryQueue);
   const itemRuleTransport = new ItemRuleTransport(root, reporter, settingsStore);
   const synchronizer = new RuleSynchronizer(root, bcx, reporter, settingsStore, itemRuleTransport);
   itemRuleTransport.setRulesReceivedCallback(() => synchronizer.scheduleSync("item-rule-response"));

@@ -12,12 +12,13 @@ const ROWS = {
   bcx: 0,
   sync: 1,
   counts: 2,
-  messages1: 3,
-  messages2: 4,
-  transport: 5,
-  debug: 6,
-  fallback: 7,
-  cachedOffline: 8,
+  queue: 3,
+  messages1: 4,
+  messages2: 5,
+  transport: 6,
+  debug: 7,
+  fallback: 8,
+  cachedOffline: 9,
   actions: 9,
   advancedActions: 10,
 } as const;
@@ -66,6 +67,7 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
     const settings = this.settingsStore.get();
     const sync = this.synchronizer.getDiagnostics();
     const transport = this.itemRuleTransport?.getDiagnostics() || {};
+    const queue = this.bcx.getQueryQueueDiagnostics();
     const authoring = this.authoring?.getState();
     const lockActive = isWornItemRuleLockActive(this.root, settings);
     this.drawLeftLabel(ROWS.bcx, this.t("diagnostics.bcx", {
@@ -81,6 +83,11 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
       managed: String(sync.managedRuleCount || 0),
       pending: String(transport.pendingRequestCount || 0),
     }));
+    this.drawLeftLabel(ROWS.queue, this.t("diagnostics.queue", {
+      active: String(queue?.activeLabel || this.t("common.none")),
+      waiting: String(queue?.queueLength || 0),
+      processed: String(queue?.processedCount || 0),
+    }), String(queue?.lastError || this.t("common.none")));
     this.drawLeftCheckbox(ROWS.messages1, this.t("diagnostics.conflicts"), this.t("diagnostics.conflicts.tip"), settings.showConflictMessages);
     this.drawLeftCheckbox(ROWS.messages2, this.t("diagnostics.invalid"), this.t("diagnostics.invalid.tip"), settings.showInvalidPayloadMessages);
     this.drawLeftCheckbox(ROWS.transport, this.t("diagnostics.transport"), this.t("diagnostics.transport.tip"), settings.showTransportMessages);
@@ -212,6 +219,7 @@ export class SettingsDiagnosticsScreen extends SettingsScreen {
       settings: this.settingsStore.get(),
       sync: this.synchronizer.getDiagnostics(),
       transport: this.itemRuleTransport?.getDiagnostics() || {},
+      queue: this.bcx.getQueryQueueDiagnostics(),
       authoring: this.authoring?.getState() || null,
       bcxAvailable: this.bcx.canUseBCX(),
     }, null, 2);

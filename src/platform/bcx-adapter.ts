@@ -2,6 +2,7 @@ import { MOD_ID, QUERY_TIMEOUT_MS } from "../shared/constants";
 import type { HostWindow } from "./root";
 import type { CreatorSenderContext, CreatorSenderQueryTransport } from "./creator-sender-query-transport";
 import type { UseMeQueryTransport } from "./use-me-query-transport";
+import type { BCXQueryQueue, BCXQueryQueueDiagnostics } from "./bcx-query-queue";
 
 export type RuleQueryContext =
   | { kind: "self" }
@@ -15,6 +16,7 @@ export class BCXAdapter {
     private readonly root: HostWindow,
     private readonly creatorSenderTransport?: CreatorSenderQueryTransport,
     private readonly useMeTransport?: UseMeQueryTransport,
+    private readonly queryQueue?: BCXQueryQueue,
   ) {}
 
   canUseBCX(): boolean {
@@ -33,6 +35,16 @@ export class BCXAdapter {
   }
 
   async query(type: string, data: unknown, context: RuleQueryContext = { kind: "self" }): Promise<any> {
+    const label = this.makeQueryLabel(type, context);
+    const runQuery = (): Promise<any> => this.queryDirect(type, data, context);
+    return this.queryQueue ? this.queryQueue.enqueue(label, runQuery) : runQuery();
+  }
+
+  getQueryQueueDiagnostics(): BCXQueryQueueDiagnostics | null {
+    return this.queryQueue?.getDiagnostics() || null;
+  }
+
+  private async queryDirect(type: string, data: unknown, context: RuleQueryContext): Promise<any> {
     if (context.kind === "creator") {
       if (!this.creatorSenderTransport) throw new Error("Creator sender transport is unavailable");
       return this.creatorSenderTransport.queryAsSender(type, data, context, QUERY_TIMEOUT_MS);
@@ -46,6 +58,12 @@ export class BCXAdapter {
       throw new Error("BCX API is unavailable");
     }
     return api.sendQuery(type, data, "Player", QUERY_TIMEOUT_MS);
+  }
+
+  private makeQueryLabel(type: string, context: RuleQueryContext): string {
+    if (context.kind === "creator") return "creator:" + context.memberNumber + ":" + type;
+    if (context.kind === "useMe") return "useMe:" + type;
+    return "self:" + type;
   }
 
   isKnownRule(ruleId: string): boolean {

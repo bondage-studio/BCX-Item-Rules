@@ -36,6 +36,7 @@ const hooks = new Map();
 const elements = new Map();
 const informationSheetClicks = [];
 const preferenceActions = [];
+const bcxQueryLog = [];
 let currentTime = 1000000;
 let virtualReady = false;
 const bcxRuleConditions = {};
@@ -125,6 +126,7 @@ const context = {
       getModApi() {
         return {
           sendQuery(type, data) {
+            bcxQueryLog.push({ type, data, active: 1 });
             if (type === "conditionsGet") return Promise.resolve({ conditions: clone(bcxRuleConditions) });
             if (type === "ruleCreate") {
               if (!bcxRuleConditions[data]) {
@@ -153,7 +155,14 @@ const context = {
         };
       },
     },
-    setTimeout(callback) { timers.push(callback); return timers.length; },
+    setTimeout(callback, delay) {
+      if (delay === 150) {
+        queueMicrotask(callback);
+        return -timers.length - 1;
+      }
+      timers.push(callback);
+      return timers.length;
+    },
     clearTimeout() {},
     setInterval() {},
     ServerSend(type, packet) {
@@ -802,6 +811,36 @@ assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStren
 assert.equal(JSON.parse(localStore.get("BCXIR_state_12345")).activeItemPayloads["99999:priority item"].payload.id, "extension-priority-new");
 context.window.Player.Appearance = [];
 assert.equal(await api.syncNow("extension-snapshot-priority-remove"), true);
+localStore.delete("BCXIR_state_12345");
+Object.keys(bcxRuleConditions).forEach((key) => delete bcxRuleConditions[key]);
+api.updateSettings({ rulePermissionMode: "self", dangerModeEnabled: false, allowForeignItemRules: true });
+api.registerItemRules("Batch Rules", {
+  v: 1,
+  id: "batch-rules",
+  r: [
+    { k: "alt_restrict_sight", d: { blindnessStrength: "batch-sight" } },
+    { k: "alt_set_nickname", d: { nickname: "Batch Nickname" } },
+  ],
+});
+context.window.Player.Appearance = [{
+  Asset: { Name: "Blindfold", Group: { Name: "ItemHead", Category: "Item" } },
+  Craft: { Name: "Batch Rules", MemberNumber: 12345 },
+}];
+bcxQueryLog.length = 0;
+assert.equal(await api.syncNow("batch-query-test"), true);
+assert.equal(bcxQueryLog.filter((entry) => entry.type === "conditionsGet").length, 2);
+assert.deepEqual(bcxQueryLog.map((entry) => entry.type), [
+  "conditionsGet",
+  "ruleCreate",
+  "ruleCreate",
+  "conditionsGet",
+  "conditionUpdate",
+  "conditionUpdate",
+]);
+assert.equal(bcxRuleConditions.alt_restrict_sight.data.customData.blindnessStrength, "batch-sight");
+assert.equal(bcxRuleConditions.alt_set_nickname.data.customData.nickname, "Batch Nickname");
+context.window.Player.Appearance = [];
+assert.equal(await api.syncNow("batch-query-cleanup"), true);
 assert.equal(api.getSettings().respondToRuleRequests, true);
 assert.equal(api.getSettings().autoRequestForeignRules, true);
 assert.equal(api.getSettings().showTransportMessages, true);
