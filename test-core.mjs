@@ -660,6 +660,19 @@ assert.equal(serverSends.length, 0);
 context.window.Player.Appearance = [];
 api.updateSettings({ lockWornItemRules: false });
 assert.equal(api.getSettings().lockWornItemRules, false);
+context.window.Player.Appearance = [{
+  Asset: { Name: "Rope", Group: { Name: "ItemArms", Category: "Item" } },
+  Craft: { Name: "Plain Unregistered Rope", MemberNumber: 424242 },
+}];
+api.updateSettings({ lockWornItemRules: true, allowCachedOfflineCreator: false });
+assert.equal(api.getSettings().lockWornItemRules, true);
+assert.equal(api.getSettings().allowCachedOfflineCreator, false);
+api.clearRequestCooldowns();
+serverSends.length = 0;
+assert.equal(typeof api.requestItemRules(context.window.Player.Appearance[0]), "string");
+assert.equal(serverSends.length, 1);
+context.window.Player.Appearance = [];
+api.updateSettings({ lockWornItemRules: false, allowCachedOfflineCreator: true });
 api.clearRequestCooldowns();
 serverSends.length = 0;
 const lockedResponseRequestId = api.requestItemRules({

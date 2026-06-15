@@ -564,190 +564,6 @@
     saveRuleCache(root, state);
     return true;
   }
-  const LOCKED_SETTING_KEYS = /* @__PURE__ */ new Set([
-    "rulePermissionMode",
-    "dangerModeEnabled",
-    "unlockUseMeMode",
-    "useMeSuspendInactiveConflicts",
-    "allowCachedOfflineCreator",
-    "lockWornItemRules"
-  ]);
-  function getWornItemRuleLockState(root, settings) {
-    var _a, _b, _c;
-    const state = {
-      enabled: settings.lockWornItemRules === true,
-      active: false,
-      protectedItemCount: 0,
-      registryItemNames: /* @__PURE__ */ new Set(),
-      cacheKeys: /* @__PURE__ */ new Set(),
-      remoteItemKeys: /* @__PURE__ */ new Set()
-    };
-    if (!state.enabled) return state;
-    const playerNumber = normalizeMemberNumber$1((_a = root.Player) == null ? void 0 : _a.MemberNumber);
-    const appearance = Array.isArray((_b = root.Player) == null ? void 0 : _b.Appearance) ? root.Player.Appearance : [];
-    for (const item of appearance) {
-      if (!isWearerItem(item, { scanItemCategoryOnly: settings.scanItemCategoryOnly })) continue;
-      const itemName = getItemRuleName(item);
-      if (!itemName) continue;
-      const crafter = normalizeMemberNumber$1((_c = item == null ? void 0 : item.Craft) == null ? void 0 : _c.MemberNumber);
-      if (playerNumber != null && crafter === playerNumber) {
-        const entry = findMatchingRegistryEntry(root, item);
-        if (!entry) continue;
-        state.registryItemNames.add(normalizeItemName(entry.itemName));
-        state.protectedItemCount += 1;
-        continue;
-      }
-      if (crafter == null) continue;
-      const cacheKey = makeRuleCacheKey(crafter, itemName);
-      state.remoteItemKeys.add(cacheKey);
-      const cached = getCachedItemRules(root, crafter, itemName);
-      if (cached) state.cacheKeys.add(cached.cacheKey);
-      state.protectedItemCount += 1;
-    }
-    state.active = state.protectedItemCount > 0;
-    return state;
-  }
-  function isWornItemRuleLockActive(root, settings) {
-    return getWornItemRuleLockState(root, settings).active;
-  }
-  function canModifyRegisteredItem(root, settings, itemName) {
-    const lock = getWornItemRuleLockState(root, settings);
-    return !lock.active || !lock.registryItemNames.has(normalizeItemName(itemName));
-  }
-  function canModifyCacheEntry(root, settings, cacheKey) {
-    const lock = getWornItemRuleLockState(root, settings);
-    return !lock.active || !lock.cacheKeys.has(cacheKey);
-  }
-  function canRefreshRemoteItemRules(root, settings, crafter, itemName) {
-    const lock = getWornItemRuleLockState(root, settings);
-    return !lock.active || !lock.remoteItemKeys.has(makeRuleCacheKey(crafter, itemName));
-  }
-  function hasLockedRegistryEntries(root, settings) {
-    return getWornItemRuleLockState(root, settings).registryItemNames.size > 0;
-  }
-  function hasLockedCacheEntries(root, settings) {
-    return getWornItemRuleLockState(root, settings).cacheKeys.size > 0;
-  }
-  function filterSettingsPatchForWornItemLock(root, current, patch) {
-    if (!isWornItemRuleLockActive(root, current)) return patch;
-    const next = { ...patch };
-    for (const key of LOCKED_SETTING_KEYS) delete next[key];
-    return next;
-  }
-  function normalizeMemberNumber$1(value) {
-    const memberNumber = Number(value);
-    return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
-  }
-  function buildPublicApi(root, synchronizer, settingsStore, settingsRegistry, authoring, itemRuleTransport) {
-    return {
-      version: VERSION,
-      encodePayload,
-      decodePayload,
-      collectDesiredRulesFromAppearance,
-      getRegistry: () => listRegistryEntries(root),
-      getRuleCache: () => listRuleCacheEntries(root),
-      registerItemRules: (itemName, payload) => {
-        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return getRegisteredItem(root, itemName);
-        const entry = registerItemRules(root, itemName, payload);
-        synchronizer.scheduleSync("registry-api");
-        return entry;
-      },
-      deleteRegisteredItem: (itemName) => {
-        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return false;
-        const deleted = deleteRegisteredItem(root, itemName);
-        synchronizer.scheduleSync("registry-api");
-        return deleted;
-      },
-      updateRegisteredItem: (itemName, patch) => {
-        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return null;
-        const entry = updateRegisteredItem(root, itemName, patch);
-        synchronizer.scheduleSync("registry-api");
-        return entry;
-      },
-      requestItemRules: (item, targetOverride) => (itemRuleTransport == null ? void 0 : itemRuleTransport.requestItemRules(item, targetOverride)) ?? null,
-      clearRuleCache: () => {
-        if (hasLockedCacheEntries(root, settingsStore.get())) return;
-        clearRuleCache(root);
-        synchronizer.scheduleSync("cache-api");
-      },
-      deleteCachedItemRules: (cacheKey) => {
-        if (!canModifyCacheEntry(root, settingsStore.get(), cacheKey)) return false;
-        const deleted = deleteCachedItemRules(root, cacheKey);
-        synchronizer.scheduleSync("cache-api");
-        return deleted;
-      },
-      clearRequestCooldowns: () => itemRuleTransport == null ? void 0 : itemRuleTransport.clearCooldowns(),
-      releaseManagedRules: (reason) => synchronizer.releaseManagedRules(reason || "api-release"),
-      syncNow: (reason) => synchronizer.syncNow(reason),
-      scheduleSync: (reason) => synchronizer.scheduleSync(reason),
-      getSettings: () => settingsStore.get(),
-      updateSettings: (patch) => {
-        const next = settingsStore.update(patch);
-        synchronizer.startFallbackTimer();
-        synchronizer.scheduleSync("settings-api");
-        return next;
-      },
-      openSettings: () => settingsRegistry.open(),
-      openAuthoring: (options) => (authoring == null ? void 0 : authoring.open(options)) ?? Promise.resolve(false),
-      finishAuthoring: () => (authoring == null ? void 0 : authoring.finish()) ?? Promise.resolve(null),
-      cancelAuthoring: () => (authoring == null ? void 0 : authoring.cancel()) ?? false,
-      getAuthoringState: () => (authoring == null ? void 0 : authoring.getState()) ?? {
-        status: "idle",
-        virtualMemberNumber: null,
-        lastRegisteredItem: null,
-        lastError: "authoring unavailable",
-        bcxVersionReady: false,
-        transportActive: false,
-        bridgeActive: false,
-        nativeRoomActive: null,
-        lastInboundType: null,
-        lastOutboundType: null,
-        lastQuery: null,
-        queryCount: 0,
-        messageCount: 0,
-        lastInitStep: null
-      }
-    };
-  }
-  class Reporter {
-    constructor(root, settingsStore) {
-      __publicField(this, "lastReportKey", "");
-      this.root = root;
-      this.settingsStore = settingsStore;
-    }
-    shouldShow(kind) {
-      var _a;
-      const settings = (_a = this.settingsStore) == null ? void 0 : _a.get();
-      if (kind === "conflict" && (settings == null ? void 0 : settings.showConflictMessages) === false) return false;
-      if (kind === "invalid-payload" && (settings == null ? void 0 : settings.showInvalidPayloadMessages) === false) return false;
-      return true;
-    }
-    localMessage(message, kind = "info") {
-      console.warn("[BCXIR]", message);
-      if (!this.shouldShow(kind)) return;
-      try {
-        if (typeof this.root.ChatRoomSendLocal === "function") {
-          this.root.ChatRoomSendLocal("[BCXIR] " + message, 8e3);
-        } else if (typeof this.root.InfoBeep === "function") {
-          this.root.InfoBeep("[BCXIR] " + message, 8e3);
-        }
-      } catch {
-      }
-    }
-    reportOnce(kind, messages, reportKind = "info") {
-      if (!messages.length) return;
-      const key = kind + ":" + messages.join("|");
-      if (key === this.lastReportKey) return;
-      this.lastReportKey = key;
-      this.localMessage(
-        messages.slice(0, 4).join(" | ") + (messages.length > 4 ? " | ..." : ""),
-        reportKind
-      );
-    }
-  }
-  function getRoot() {
-    return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
-  }
   function decodeExtensionSettingsRaw(root, raw) {
     if (typeof raw !== "string" || !raw) return null;
     const lz = getLz(root);
@@ -873,7 +689,7 @@
       const originatorSource = normalizeOriginatorSource(raw.originatorSource);
       out[key] = {
         payload,
-        originatorMemberNumber: normalizeMemberNumber(raw.originatorMemberNumber),
+        originatorMemberNumber: normalizeMemberNumber$1(raw.originatorMemberNumber),
         originatorSource,
         allowMinimalCreator: raw.allowMinimalCreator === true,
         itemName,
@@ -885,9 +701,196 @@
   function normalizeOriginatorSource(value) {
     return value === "registry" || value === "cache" ? value : "unknown";
   }
+  function normalizeMemberNumber$1(value) {
+    const memberNumber = Number(value);
+    return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+  }
+  const LOCKED_SETTING_KEYS = /* @__PURE__ */ new Set([
+    "rulePermissionMode",
+    "dangerModeEnabled",
+    "unlockUseMeMode",
+    "useMeSuspendInactiveConflicts",
+    "allowCachedOfflineCreator",
+    "lockWornItemRules"
+  ]);
+  function getWornItemRuleLockState(root, settings) {
+    var _a, _b, _c;
+    const state = {
+      enabled: settings.lockWornItemRules === true,
+      active: false,
+      protectedItemCount: 0,
+      registryItemNames: /* @__PURE__ */ new Set(),
+      cacheKeys: /* @__PURE__ */ new Set(),
+      remoteItemKeys: /* @__PURE__ */ new Set()
+    };
+    if (!state.enabled) return state;
+    const playerNumber = normalizeMemberNumber((_a = root.Player) == null ? void 0 : _a.MemberNumber);
+    const appearance = Array.isArray((_b = root.Player) == null ? void 0 : _b.Appearance) ? root.Player.Appearance : [];
+    const activeItemPayloads = loadState(root).activeItemPayloads;
+    for (const item of appearance) {
+      if (!isWearerItem(item, { scanItemCategoryOnly: settings.scanItemCategoryOnly })) continue;
+      const itemName = getItemRuleName(item);
+      if (!itemName) continue;
+      const crafter = normalizeMemberNumber((_c = item == null ? void 0 : item.Craft) == null ? void 0 : _c.MemberNumber);
+      if (playerNumber != null && crafter === playerNumber) {
+        const entry = findMatchingRegistryEntry(root, item);
+        if (!entry) continue;
+        state.registryItemNames.add(normalizeItemName(entry.itemName));
+        state.protectedItemCount += 1;
+        continue;
+      }
+      if (crafter == null) continue;
+      const cacheKey = makeRuleCacheKey(crafter, itemName);
+      const cached = getCachedItemRules(root, crafter, itemName);
+      const activePayload = activeItemPayloads[cacheKey];
+      if (!cached && !activePayload) continue;
+      state.remoteItemKeys.add(cacheKey);
+      if (cached) state.cacheKeys.add(cached.cacheKey);
+      state.protectedItemCount += 1;
+    }
+    state.active = state.protectedItemCount > 0;
+    return state;
+  }
+  function isWornItemRuleLockActive(root, settings) {
+    return getWornItemRuleLockState(root, settings).active;
+  }
+  function canModifyRegisteredItem(root, settings, itemName) {
+    const lock = getWornItemRuleLockState(root, settings);
+    return !lock.active || !lock.registryItemNames.has(normalizeItemName(itemName));
+  }
+  function canModifyCacheEntry(root, settings, cacheKey) {
+    const lock = getWornItemRuleLockState(root, settings);
+    return !lock.active || !lock.cacheKeys.has(cacheKey);
+  }
+  function canRefreshRemoteItemRules(root, settings, crafter, itemName) {
+    const lock = getWornItemRuleLockState(root, settings);
+    return !lock.active || !lock.remoteItemKeys.has(makeRuleCacheKey(crafter, itemName));
+  }
+  function hasLockedRegistryEntries(root, settings) {
+    return getWornItemRuleLockState(root, settings).registryItemNames.size > 0;
+  }
+  function hasLockedCacheEntries(root, settings) {
+    return getWornItemRuleLockState(root, settings).cacheKeys.size > 0;
+  }
+  function filterSettingsPatchForWornItemLock(root, current, patch) {
+    if (!isWornItemRuleLockActive(root, current)) return patch;
+    const next = { ...patch };
+    for (const key of LOCKED_SETTING_KEYS) delete next[key];
+    return next;
+  }
   function normalizeMemberNumber(value) {
     const memberNumber = Number(value);
     return Number.isFinite(memberNumber) && memberNumber > 0 ? memberNumber : null;
+  }
+  function buildPublicApi(root, synchronizer, settingsStore, settingsRegistry, authoring, itemRuleTransport) {
+    return {
+      version: VERSION,
+      encodePayload,
+      decodePayload,
+      collectDesiredRulesFromAppearance,
+      getRegistry: () => listRegistryEntries(root),
+      getRuleCache: () => listRuleCacheEntries(root),
+      registerItemRules: (itemName, payload) => {
+        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return getRegisteredItem(root, itemName);
+        const entry = registerItemRules(root, itemName, payload);
+        synchronizer.scheduleSync("registry-api");
+        return entry;
+      },
+      deleteRegisteredItem: (itemName) => {
+        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return false;
+        const deleted = deleteRegisteredItem(root, itemName);
+        synchronizer.scheduleSync("registry-api");
+        return deleted;
+      },
+      updateRegisteredItem: (itemName, patch) => {
+        if (!canModifyRegisteredItem(root, settingsStore.get(), itemName)) return null;
+        const entry = updateRegisteredItem(root, itemName, patch);
+        synchronizer.scheduleSync("registry-api");
+        return entry;
+      },
+      requestItemRules: (item, targetOverride) => (itemRuleTransport == null ? void 0 : itemRuleTransport.requestItemRules(item, targetOverride)) ?? null,
+      clearRuleCache: () => {
+        if (hasLockedCacheEntries(root, settingsStore.get())) return;
+        clearRuleCache(root);
+        synchronizer.scheduleSync("cache-api");
+      },
+      deleteCachedItemRules: (cacheKey) => {
+        if (!canModifyCacheEntry(root, settingsStore.get(), cacheKey)) return false;
+        const deleted = deleteCachedItemRules(root, cacheKey);
+        synchronizer.scheduleSync("cache-api");
+        return deleted;
+      },
+      clearRequestCooldowns: () => itemRuleTransport == null ? void 0 : itemRuleTransport.clearCooldowns(),
+      releaseManagedRules: (reason) => synchronizer.releaseManagedRules(reason || "api-release"),
+      syncNow: (reason) => synchronizer.syncNow(reason),
+      scheduleSync: (reason) => synchronizer.scheduleSync(reason),
+      getSettings: () => settingsStore.get(),
+      updateSettings: (patch) => {
+        const next = settingsStore.update(patch);
+        synchronizer.startFallbackTimer();
+        synchronizer.scheduleSync("settings-api");
+        return next;
+      },
+      openSettings: () => settingsRegistry.open(),
+      openAuthoring: (options) => (authoring == null ? void 0 : authoring.open(options)) ?? Promise.resolve(false),
+      finishAuthoring: () => (authoring == null ? void 0 : authoring.finish()) ?? Promise.resolve(null),
+      cancelAuthoring: () => (authoring == null ? void 0 : authoring.cancel()) ?? false,
+      getAuthoringState: () => (authoring == null ? void 0 : authoring.getState()) ?? {
+        status: "idle",
+        virtualMemberNumber: null,
+        lastRegisteredItem: null,
+        lastError: "authoring unavailable",
+        bcxVersionReady: false,
+        transportActive: false,
+        bridgeActive: false,
+        nativeRoomActive: null,
+        lastInboundType: null,
+        lastOutboundType: null,
+        lastQuery: null,
+        queryCount: 0,
+        messageCount: 0,
+        lastInitStep: null
+      }
+    };
+  }
+  class Reporter {
+    constructor(root, settingsStore) {
+      __publicField(this, "lastReportKey", "");
+      this.root = root;
+      this.settingsStore = settingsStore;
+    }
+    shouldShow(kind) {
+      var _a;
+      const settings = (_a = this.settingsStore) == null ? void 0 : _a.get();
+      if (kind === "conflict" && (settings == null ? void 0 : settings.showConflictMessages) === false) return false;
+      if (kind === "invalid-payload" && (settings == null ? void 0 : settings.showInvalidPayloadMessages) === false) return false;
+      return true;
+    }
+    localMessage(message, kind = "info") {
+      console.warn("[BCXIR]", message);
+      if (!this.shouldShow(kind)) return;
+      try {
+        if (typeof this.root.ChatRoomSendLocal === "function") {
+          this.root.ChatRoomSendLocal("[BCXIR] " + message, 8e3);
+        } else if (typeof this.root.InfoBeep === "function") {
+          this.root.InfoBeep("[BCXIR] " + message, 8e3);
+        }
+      } catch {
+      }
+    }
+    reportOnce(kind, messages, reportKind = "info") {
+      if (!messages.length) return;
+      const key = kind + ":" + messages.join("|");
+      if (key === this.lastReportKey) return;
+      this.lastReportKey = key;
+      this.localMessage(
+        messages.slice(0, 4).join(" | ") + (messages.length > 4 ? " | ..." : ""),
+        reportKind
+      );
+    }
+  }
+  function getRoot() {
+    return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   }
   class RuleSynchronizer {
     constructor(root, bcx, reporter, settingsStore, itemRuleTransport) {

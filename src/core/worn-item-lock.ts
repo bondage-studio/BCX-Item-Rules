@@ -1,5 +1,6 @@
 import type { HostWindow } from "../platform/root";
 import type { BCXIRSettings } from "../shared/types";
+import { loadState } from "../shared/storage";
 import { getCachedItemRules, getItemRuleName, findMatchingRegistryEntry, makeRuleCacheKey, normalizeItemName } from "./item-registry";
 import { isWearerItem } from "./scanner";
 
@@ -34,6 +35,7 @@ export function getWornItemRuleLockState(root: HostWindow, settings: Pick<BCXIRS
 
   const playerNumber = normalizeMemberNumber(root.Player?.MemberNumber);
   const appearance = Array.isArray(root.Player?.Appearance) ? root.Player.Appearance : [];
+  const activeItemPayloads = loadState(root).activeItemPayloads;
   for (const item of appearance) {
     if (!isWearerItem(item, { scanItemCategoryOnly: settings.scanItemCategoryOnly })) continue;
     const itemName = getItemRuleName(item);
@@ -48,8 +50,10 @@ export function getWornItemRuleLockState(root: HostWindow, settings: Pick<BCXIRS
     }
     if (crafter == null) continue;
     const cacheKey = makeRuleCacheKey(crafter, itemName);
-    state.remoteItemKeys.add(cacheKey);
     const cached = getCachedItemRules(root, crafter, itemName);
+    const activePayload = activeItemPayloads[cacheKey];
+    if (!cached && !activePayload) continue;
+    state.remoteItemKeys.add(cacheKey);
     if (cached) state.cacheKeys.add(cached.cacheKey);
     state.protectedItemCount += 1;
   }
