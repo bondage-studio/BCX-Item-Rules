@@ -2,6 +2,8 @@
 
 [中文说明](#中文说明)
 
+For a comprehensive tutorial for users, see [https://bondage-studio.github.io/bcx-item-rules/](https://bondage-studio.github.io/bcx-item-rules/).
+
 BCX Item Rules, or BCXIR, is an independent Bondage Club userscript that links locally registered crafted item names to BCX Rules. When a player wears a matching item, BCXIR applies the registered BCX rule payload to the local player through BCX.
 
 BCXIR does not write to BCX internal storage.
@@ -202,6 +204,8 @@ Make sure `package.json` `bcxir.remoteBase` points to the location where `BCXIte
 ---
 
 # 中文说明
+
+详细的使用说明请参见[https://bondage-studio.github.io/zh/bcx-item-rules/](https://bondage-studio.github.io/zh/bcx-item-rules/).
 
 BCX Item Rules，简称 BCXIR，是一个独立的 Bondage Club userscript。它把“本地注册的制作道具名称”和 BCX Rules 关联起来：当玩家穿戴匹配的道具时，BCXIR 会通过 BCX 把对应规则应用到本地玩家身上。
 
